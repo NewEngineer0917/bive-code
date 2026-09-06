@@ -5,6 +5,7 @@ import { auth } from './firebase';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 import Signup from './components/Signup';
 import Login from './components/Login';
+import FpsGame from './components/FpsGame';
 
 function Home() {
   const [todos, setTodos] = useState([]);
@@ -48,9 +49,14 @@ function Home() {
       <nav className="bg-gray-800 p-4">
         <div className="container mx-auto flex justify-between items-center">
           <Link to="/" className="text-white text-lg font-bold">Todo App</Link>
-          <button onClick={handleLogout} className="bg-red-500 hover:bg-red-700 text-white font-bold py-2 px-4 rounded">
-            ログアウト
-          </button>
+          <div className="flex items-center gap-2">
+            <Link to="/fps" className="bg-indigo-500 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded">
+              🎮 FPSゲーム
+            </Link>
+            <button onClick={handleLogout} className="bg-red-500 hover:bg-red-700 text-white font-bold py-2 px-4 rounded">
+              ログアウト
+            </button>
+          </div>
         </div>
       </nav>
       <div className="container mx-auto p-4">
@@ -113,6 +119,7 @@ function App() {
       <Routes>
         <Route path="/signup" element={<Signup />} />
         <Route path="/login" element={<Login />} />
+        <Route path="/fps" element={<FpsGame />} />
         <Route
           path="/"
           element={currentUser ? <Home /> : <Login />}

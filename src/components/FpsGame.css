@@ -1,0 +1,349 @@
+.fps-root {
+  position: fixed;
+  inset: 0;
+  background: #05060d;
+  color: #e8f1ff;
+  overflow: hidden;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior: none;
+  font-family: 'Segoe UI', 'Hiragino Kaku Gothic ProN', 'Noto Sans JP', system-ui, sans-serif;
+}
+
+.fps-canvas {
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: crosshair;
+}
+
+.fps-layer {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+
+/* ---------------------------------- HUD ---------------------------------- */
+
+.fps-hud {
+  position: absolute;
+  top: calc(env(safe-area-inset-top, 0px) + 10px);
+  left: calc(env(safe-area-inset-left, 0px) + 12px);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 46vw;
+}
+
+.fps-hpbar {
+  width: min(240px, 42vw);
+  height: 14px;
+  border: 2px solid rgba(120, 220, 255, 0.55);
+  border-radius: 8px;
+  background: rgba(8, 12, 24, 0.7);
+  overflow: hidden;
+}
+
+.fps-hpbar > i {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #35d6a4, #7ef0c6);
+  transition: width 0.15s linear;
+}
+
+.fps-hpbar.low > i {
+  background: linear-gradient(90deg, #e8384f, #ff8a6a);
+}
+
+.fps-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.fps-chip {
+  background: rgba(8, 12, 24, 0.72);
+  border: 1px solid rgba(120, 220, 255, 0.35);
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: clamp(11px, 2.6vw, 14px);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.fps-chip.hp {
+  color: #8ff0c8;
+}
+
+.fps-ammo {
+  position: absolute;
+  left: calc(env(safe-area-inset-left, 0px) + 14px);
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 12px);
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  background: rgba(8, 12, 24, 0.6);
+  border: 1px solid rgba(120, 220, 255, 0.3);
+  border-radius: 10px;
+  padding: 4px 12px;
+}
+
+.fps-ammo b {
+  font-size: clamp(20px, 5vw, 30px);
+  color: #ffd447;
+  line-height: 1;
+}
+
+.fps-ammo span {
+  font-size: clamp(10px, 2.4vw, 13px);
+  opacity: 0.75;
+}
+
+.fps-ammo.empty b {
+  color: #ff6a6a;
+  animation: fps-blink 0.7s steps(2, end) infinite;
+}
+
+@keyframes fps-blink {
+  50% { opacity: 0.25; }
+}
+
+.fps-tools {
+  position: absolute;
+  right: calc(env(safe-area-inset-right, 0px) + 12px);
+  top: calc(env(safe-area-inset-top, 0px) + min(22vw, 22vh) + 18px);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  pointer-events: auto;
+}
+
+.fps-icon-btn {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  border: 1px solid rgba(120, 220, 255, 0.35);
+  background: rgba(8, 12, 24, 0.7);
+  color: #e8f1ff;
+  font-size: 17px;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.fps-icon-btn:active {
+  background: rgba(75, 224, 192, 0.3);
+}
+
+.fps-banner {
+  position: absolute;
+  top: 18%;
+  left: 0;
+  right: 0;
+  text-align: center;
+  font-size: clamp(26px, 8vw, 58px);
+  font-weight: 900;
+  letter-spacing: 0.14em;
+  color: #4be0c0;
+  text-shadow: 0 0 18px rgba(75, 224, 192, 0.6);
+  animation: fps-banner 1.8s ease-out forwards;
+}
+
+@keyframes fps-banner {
+  0% { opacity: 0; transform: scale(0.85); }
+  18% { opacity: 1; transform: scale(1); }
+  70% { opacity: 1; }
+  100% { opacity: 0; transform: scale(1.05); }
+}
+
+/* -------------------------------- タッチ操作 -------------------------------- */
+
+.fps-stick {
+  position: absolute;
+  width: 132px;
+  height: 132px;
+  margin: -66px 0 0 -66px;
+  border-radius: 50%;
+  border: 2px solid rgba(120, 220, 255, 0.35);
+  background: rgba(10, 16, 30, 0.35);
+}
+
+.fps-stick > i {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 56px;
+  height: 56px;
+  margin: -28px 0 0 -28px;
+  border-radius: 50%;
+  background: rgba(75, 224, 192, 0.45);
+  border: 2px solid rgba(180, 255, 240, 0.7);
+}
+
+.fps-fire {
+  position: absolute;
+  right: calc(env(safe-area-inset-right, 0px) + 18px);
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 16px);
+  width: 92px;
+  height: 92px;
+  border-radius: 50%;
+  border: 3px solid rgba(255, 120, 100, 0.65);
+  background: radial-gradient(circle at 35% 30%, rgba(255, 110, 90, 0.55), rgba(120, 20, 20, 0.5));
+  color: #fff;
+  font-weight: 900;
+  font-size: 15px;
+  letter-spacing: 0.1em;
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.fps-fire:active {
+  transform: scale(0.94);
+  background: radial-gradient(circle at 35% 30%, rgba(255, 200, 150, 0.85), rgba(200, 60, 40, 0.7));
+}
+
+.fps-jump {
+  position: absolute;
+  right: calc(env(safe-area-inset-right, 0px) + 122px);
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 22px);
+  width: 66px;
+  height: 66px;
+  border-radius: 50%;
+  border: 2px solid rgba(120, 220, 255, 0.5);
+  background: rgba(10, 20, 40, 0.55);
+  color: #cfeaff;
+  font-size: 12px;
+  font-weight: 800;
+  pointer-events: auto;
+}
+
+/* --------------------------------- オーバーレイ --------------------------------- */
+
+.fps-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: radial-gradient(circle at 50% 40%, rgba(20, 30, 60, 0.82), rgba(3, 5, 12, 0.95));
+  pointer-events: auto;
+  overflow-y: auto;
+}
+
+.fps-panel {
+  width: min(520px, 100%);
+  background: rgba(9, 13, 26, 0.9);
+  border: 1px solid rgba(120, 220, 255, 0.3);
+  border-radius: 18px;
+  padding: clamp(18px, 4vw, 30px);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+  text-align: center;
+}
+
+.fps-title {
+  font-size: clamp(28px, 8vw, 46px);
+  font-weight: 900;
+  letter-spacing: 0.1em;
+  margin: 0 0 6px;
+  background: linear-gradient(90deg, #4be0c0, #7bb4ff, #c46bff);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+
+.fps-sub {
+  margin: 0 0 18px;
+  font-size: clamp(12px, 3vw, 15px);
+  opacity: 0.75;
+}
+
+.fps-btn {
+  display: block;
+  width: 100%;
+  margin: 8px 0;
+  padding: 13px 16px;
+  border-radius: 12px;
+  border: 1px solid rgba(120, 220, 255, 0.4);
+  background: linear-gradient(180deg, rgba(40, 60, 110, 0.9), rgba(20, 30, 60, 0.9));
+  color: #eaf4ff;
+  font-size: clamp(14px, 3.6vw, 17px);
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  cursor: pointer;
+}
+
+.fps-btn:hover {
+  border-color: #4be0c0;
+}
+
+.fps-btn:active {
+  transform: translateY(1px);
+}
+
+.fps-btn.primary {
+  background: linear-gradient(180deg, #2fae90, #1c6f5c);
+  border-color: #7ef0c6;
+}
+
+.fps-btn.ghost {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.fps-help {
+  margin-top: 16px;
+  text-align: left;
+  font-size: clamp(11px, 2.9vw, 13px);
+  line-height: 1.8;
+  opacity: 0.8;
+  background: rgba(255, 255, 255, 0.04);
+  border-radius: 12px;
+  padding: 12px 14px;
+}
+
+.fps-help b {
+  color: #4be0c0;
+}
+
+.fps-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin: 16px 0 4px;
+}
+
+.fps-stat {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 12px;
+  padding: 10px 6px;
+}
+
+.fps-stat b {
+  display: block;
+  font-size: clamp(18px, 5vw, 26px);
+  color: #ffd447;
+}
+
+.fps-stat span {
+  font-size: 11px;
+  opacity: 0.7;
+}
+
+.fps-back {
+  display: inline-block;
+  margin-top: 14px;
+  color: #9fd8ff;
+  font-size: 13px;
+  text-decoration: none;
+}
+
+.fps-note {
+  margin-top: 10px;
+  font-size: 12px;
+  color: #ffd447;
+}
