@@ -39,6 +39,21 @@ npm start          # http://localhost:3000/fps が開きます
 同じWi-Fi内であれば `npm start` のログに出る `On Your Network:` のURL（例 `http://192.168.x.x:3000/fps`）を
 スマホのブラウザで開いてください。
 
+### 単一HTML版（サーバー不要）
+
+```bash
+npm run build:standalone   # → dist-standalone/index.html
+```
+
+`src/game/*.js`（React版と同じゲームロジック）と `src/game/standalone-ui.js` を
+1枚のHTMLに連結します。依存パッケージも不要で、生成されたファイルを
+ブラウザで開くだけで遊べます。
+
+このリポジトリの `gh-pages` ブランチには、この生成物が `index.html` として置いてあります。
+GitHub の **Settings → Pages → Source: Deploy from a branch → `gh-pages` / `(root)`** を
+選ぶと <https://newengineer0917.github.io/bive-code/> で公開されます。
+更新するときは再生成して `gh-pages` に push してください。
+
 ### 公開する（Netlify）
 
 このリポジトリには `netlify.toml` と `public/_redirects` を同梱しているので、
