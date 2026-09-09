@@ -1,24 +1,23 @@
 /**
- * 3D 描画用のマテリアルを手続き生成する。
+ * 街のマテリアルを手続き生成する。
  *
  * 各マテリアルは「色（アルベド）」と「高さ」を描き、高さから法線マップを作る。
- * 法線マップのアルファには粗さ（ラフネス）を入れて 1 枚にまとめている。
- * 画像ファイルを持たずに、レンガの目地の凹み・金属の傷・コンクリートの
- * ざらつきといった質感を表現するのが狙い。
+ * アルベドのアルファは「自発光マスク」として使い、夜のビルの窓を光らせる。
+ * 法線マップのアルファには粗さ（ラフネス）を入れている。
  */
 
 export const MAT_SIZE = 256;
 
 export const MATERIALS = {
-  BRICK: 0,
-  PANEL: 1,
-  CONCRETE: 2,
-  HAZARD: 3,
-  FLOOR: 4,
-  CEILING: 5,
+  FACADE_CONCRETE: 0,
+  FACADE_GLASS: 1,
+  FACADE_BRICK: 2,
+  ROAD: 3,
+  SIDEWALK: 4,
+  ROOF: 5,
+  SHUTTER: 6,
+  CONCRETE: 7,
 };
-
-const TAU = Math.PI * 2;
 
 function canvasOf(w, h) {
   const c = document.createElement('canvas');
@@ -37,7 +36,6 @@ function rngFrom(seed) {
   };
 }
 
-/** 値ノイズ（滑らかなムラ）。汚れやざらつきの土台に使う。 */
 function valueNoise(size, cells, rnd) {
   const grid = new Float32Array((cells + 1) * (cells + 1));
   for (let i = 0; i < grid.length; i++) grid[i] = rnd();
@@ -62,7 +60,6 @@ function valueNoise(size, cells, rnd) {
   return out;
 }
 
-/** 複数周波数のノイズを重ねる（フラクタルノイズ）。 */
 function fbm(size, rnd, octaves = 4, base = 4) {
   const out = new Float32Array(size * size);
   let amp = 1;
@@ -83,21 +80,19 @@ function normalFromHeight(height, size, strength, roughness, roughVariation) {
   const at = (x, y) => height[((y + size) % size) * size + ((x + size) % size)];
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
-      // Sobel フィルタで傾きを求める
       const dx = (at(x + 1, y - 1) + 2 * at(x + 1, y) + at(x + 1, y + 1))
         - (at(x - 1, y - 1) + 2 * at(x - 1, y) + at(x - 1, y + 1));
       const dy = (at(x - 1, y + 1) + 2 * at(x, y + 1) + at(x + 1, y + 1))
         - (at(x - 1, y - 1) + 2 * at(x, y - 1) + at(x + 1, y - 1));
       let nx = -dx * strength;
       let ny = -dy * strength;
-      const nz = 1;
-      const len = Math.hypot(nx, ny, nz) || 1;
+      const len = Math.hypot(nx, ny, 1) || 1;
       nx /= len;
       ny /= len;
       const i = (y * size + x) * 4;
       data[i] = (nx * 0.5 + 0.5) * 255;
       data[i + 1] = (ny * 0.5 + 0.5) * 255;
-      data[i + 2] = (nz / len * 0.5 + 0.5) * 255;
+      data[i + 2] = (1 / len * 0.5 + 0.5) * 255;
       const h = height[y * size + x];
       data[i + 3] = Math.max(0, Math.min(255, (roughness + (h - 0.5) * roughVariation) * 255));
     }
@@ -105,223 +100,117 @@ function normalFromHeight(height, size, strength, roughness, roughVariation) {
   return new ImageData(data, size, size);
 }
 
-function toImageData(canvas) {
-  return canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height);
+/** キャンバスから ImageData を取り出し、アルファ（自発光マスク）を差し替える。 */
+function toImageData(canvas, emissiveCanvas) {
+  const size = canvas.width;
+  const img = canvas.getContext('2d').getImageData(0, 0, size, size);
+  const mask = emissiveCanvas
+    ? emissiveCanvas.getContext('2d').getImageData(0, 0, size, size)
+    : null;
+  const d = img.data;
+  for (let i = 0; i < d.length; i += 4) {
+    // マスクの明るさを自発光量としてアルファに入れる（無い場合は 0）
+    d[i + 3] = mask ? mask.data[i] : 0;
+  }
+  return img;
 }
 
-/* ------------------------------- 各マテリアル ------------------------------- */
+/* ------------------------------ ビルの外壁 ------------------------------ */
 
-function brick(size, rnd) {
+/**
+ * 窓の並んだビル外壁を作る。
+ * cols × rows の窓を描き、一部だけ明かりが点いている状態にする。
+ */
+function facade(size, rnd, opts) {
   const c = canvasOf(size, size);
   const g = c.getContext('2d');
+  const emissive = canvasOf(size, size);
+  const eg = emissive.getContext('2d');
   const height = new Float32Array(size * size);
   const grime = fbm(size, rnd, 4, 3);
 
-  g.fillStyle = '#3a3330';
+  eg.fillStyle = '#000';
+  eg.fillRect(0, 0, size, size);
+
+  // 壁面のベース
+  g.fillStyle = opts.wall;
   g.fillRect(0, 0, size, size);
-
-  const rows = 8;
-  const bh = size / rows;
-  const bw = size / 4;
-  const mortar = 5;
-
-  for (let row = 0; row < rows; row++) {
-    const offset = (row % 2) * (bw / 2);
-    for (let col = -1; col < 5; col++) {
-      const x = col * bw + offset;
-      const y = row * bh;
-      const shade = 0.78 + rnd() * 0.42;
-      const r = Math.round(150 * shade);
-      const gg = Math.round(72 * shade);
-      const b = Math.round(58 * shade);
-      g.fillStyle = `rgb(${r},${gg},${b})`;
-      g.fillRect(x + mortar / 2, y + mortar / 2, bw - mortar, bh - mortar);
-      // レンガ上端のハイライト
-      g.fillStyle = `rgba(255,225,205,0.10)`;
-      g.fillRect(x + mortar / 2, y + mortar / 2, bw - mortar, 2);
+  if (opts.bands) {
+    g.fillStyle = opts.band;
+    for (let r = 0; r < opts.rows; r++) {
+      const y = (r / opts.rows) * size;
+      g.fillRect(0, y + size / opts.rows - 10, size, 10);   // 階の帯（スラブ）
     }
   }
 
-  // 汚れとムラを重ねる
-  const img = toImageData(c);
+  const cw = size / opts.cols;
+  const ch = size / opts.rows;
+  for (let r = 0; r < opts.rows; r++) {
+    for (let col = 0; col < opts.cols; col++) {
+      const x = col * cw + cw * opts.inset;
+      const y = r * ch + ch * opts.inset;
+      const w = cw * (1 - opts.inset * 2);
+      const h = ch * (1 - opts.inset * 2) * opts.aspect;
+
+      const lit = rnd() < opts.litRatio;
+      if (lit) {
+        const warm = rnd() < 0.7;
+        const cr = warm ? 255 : 190;
+        const cg = warm ? 224 : 226;
+        const cb = warm ? 168 : 255;
+        g.fillStyle = `rgb(${cr},${cg},${cb})`;
+        g.fillRect(x, y, w, h);
+        // 明かりの強さにばらつきを付ける
+        const level = 150 + ((rnd() * 105) | 0);
+        eg.fillStyle = `rgb(${level},${level},${level})`;
+        eg.fillRect(x, y, w, h);
+      } else {
+        g.fillStyle = opts.glass;
+        g.fillRect(x, y, w, h);
+        // 消えている窓にも空の映り込みを少し
+        g.fillStyle = 'rgba(120,150,190,0.18)';
+        g.fillRect(x, y, w, h * 0.35);
+      }
+      // 窓枠
+      g.strokeStyle = opts.frame;
+      g.lineWidth = 2;
+      g.strokeRect(x, y, w, h);
+
+      for (let yy = Math.floor(y); yy < y + h; yy++) {
+        for (let xx = Math.floor(x); xx < x + w; xx++) {
+          if (xx < 0 || yy < 0 || xx >= size || yy >= size) continue;
+          height[yy * size + xx] = 0.25; // 窓は少し奥まっている
+        }
+      }
+    }
+  }
+
+  const img = toImageData(c, emissive);
   const d = img.data;
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       const i = (y * size + x) * 4;
       const n = grime[y * size + x];
-      const dirt = 0.72 + n * 0.5;
-      d[i] *= dirt;
-      d[i + 1] *= dirt * 0.98;
-      d[i + 2] *= dirt * 0.95;
-      // 高さ：目地は凹み、レンガ面はわずかに粗い
-      const inMortar = d[i] < 70 && d[i + 1] < 70;
-      height[y * size + x] = (inMortar ? 0.18 : 0.85) + n * 0.12;
+      const dirt = 0.82 + n * 0.3;
+      // 窓（自発光あり）は汚さない
+      if (d[i + 3] < 30) {
+        d[i] *= dirt;
+        d[i + 1] *= dirt;
+        d[i + 2] *= dirt;
+        if (!height[y * size + x]) height[y * size + x] = 0.72 + n * 0.2;
+      }
     }
   }
-  g.putImageData(img, 0, 0);
-  return { albedo: img, normal: normalFromHeight(height, size, 2.6, 0.82, 0.18) };
+  return { albedo: img, normal: normalFromHeight(height, size, opts.relief, opts.rough, 0.15) };
 }
 
-function panel(size, rnd) {
+/* -------------------------------- 路面など -------------------------------- */
+
+function road(size, rnd) {
   const c = canvasOf(size, size);
   const g = c.getContext('2d');
-  const height = new Float32Array(size * size);
-  const wear = fbm(size, rnd, 5, 5);
-
-  g.fillStyle = '#20283c';
-  g.fillRect(0, 0, size, size);
-
-  // 大きな金属パネル
-  const pad = 10;
-  for (let i = 0; i < 2; i++) {
-    const y = i * (size / 2);
-    const grad = g.createLinearGradient(0, y, 0, y + size / 2);
-    grad.addColorStop(0, '#4a5878');
-    grad.addColorStop(0.5, '#35415c');
-    grad.addColorStop(1, '#2a3348');
-    g.fillStyle = grad;
-    g.fillRect(pad, y + pad, size - pad * 2, size / 2 - pad * 2);
-  }
-
-  // リベット
-  for (const [x, y] of [[20, 20], [size - 20, 20], [20, size - 20], [size - 20, size - 20], [size / 2, 20], [size / 2, size - 20]]) {
-    const rg = g.createRadialGradient(x - 2, y - 2, 1, x, y, 7);
-    rg.addColorStop(0, '#9fb0cc');
-    rg.addColorStop(1, '#39435c');
-    g.fillStyle = rg;
-    g.beginPath();
-    g.arc(x, y, 6, 0, TAU);
-    g.fill();
-  }
-
-  // 発光ライン
-  g.fillStyle = '#4be0c0';
-  g.fillRect(pad + 8, size / 2 - 5, size - pad * 2 - 16, 4);
-
-  // 傷
-  g.strokeStyle = 'rgba(180,200,230,0.16)';
-  for (let i = 0; i < 26; i++) {
-    g.lineWidth = rnd() * 1.6;
-    const x = rnd() * size;
-    const y = rnd() * size;
-    g.beginPath();
-    g.moveTo(x, y);
-    g.lineTo(x + (rnd() - 0.5) * 60, y + (rnd() - 0.5) * 20);
-    g.stroke();
-  }
-
-  const img = toImageData(c);
-  const d = img.data;
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
-      const i = (y * size + x) * 4;
-      const n = wear[y * size + x];
-      const k = 0.85 + n * 0.3;
-      d[i] *= k;
-      d[i + 1] *= k;
-      d[i + 2] *= k;
-      const edge = x < pad || x > size - pad || y % (size / 2) < pad || y % (size / 2) > size / 2 - pad;
-      height[y * size + x] = (edge ? 0.25 : 0.8) + n * 0.1;
-    }
-  }
-  g.putImageData(img, 0, 0);
-  // 金属なので全体につるっとした反射（粗さ低め）
-  return { albedo: img, normal: normalFromHeight(height, size, 2.2, 0.42, 0.22) };
-}
-
-function concrete(size, rnd) {
-  const c = canvasOf(size, size);
-  const g = c.getContext('2d');
-  const grain = fbm(size, rnd, 5, 8);
-  const stains = fbm(size, rnd, 3, 2);
-  const height = new Float32Array(size * size);
-
-  const img = g.createImageData(size, size);
-  const d = img.data;
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
-      const i = (y * size + x) * 4;
-      const n = grain[y * size + x];
-      const s = stains[y * size + x];
-      const base = 108 + n * 60 - s * 34;
-      d[i] = base * 1.0;
-      d[i + 1] = base * 1.02;
-      d[i + 2] = base * 1.08;
-      d[i + 3] = 255;
-      height[y * size + x] = 0.5 + (n - 0.5) * 0.7;
-    }
-  }
-  g.putImageData(img, 0, 0);
-
-  // ひび割れ
-  g.strokeStyle = 'rgba(30,32,40,0.55)';
-  for (let i = 0; i < 5; i++) {
-    let x = rnd() * size;
-    let y = rnd() * size;
-    g.lineWidth = 1 + rnd() * 1.5;
-    g.beginPath();
-    g.moveTo(x, y);
-    for (let k = 0; k < 14; k++) {
-      x += (rnd() - 0.5) * 34;
-      y += (rnd() - 0.5) * 34;
-      g.lineTo(x, y);
-    }
-    g.stroke();
-  }
-
-  const out = toImageData(c);
-  return { albedo: out, normal: normalFromHeight(height, size, 1.8, 0.9, 0.12) };
-}
-
-function hazard(size, rnd) {
-  const c = canvasOf(size, size);
-  const g = c.getContext('2d');
-  const height = new Float32Array(size * size);
-  const wear = fbm(size, rnd, 4, 6);
-
-  g.fillStyle = '#1b1d26';
-  g.fillRect(0, 0, size, size);
-  g.save();
-  g.beginPath();
-  g.rect(0, 0, size, size);
-  g.clip();
-  g.strokeStyle = '#d6ad2e';
-  g.lineWidth = 26;
-  for (let i = -size; i < size * 2; i += 64) {
-    g.beginPath();
-    g.moveTo(i, -10);
-    g.lineTo(i + size, size + 10);
-    g.stroke();
-  }
-  g.restore();
-
-  g.fillStyle = '#141720';
-  g.fillRect(0, size * 0.42, size, size * 0.16);
-  g.fillStyle = '#4be0c0';
-  g.fillRect(6, size * 0.47, size - 12, size * 0.05);
-
-  const img = toImageData(c);
-  const d = img.data;
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
-      const i = (y * size + x) * 4;
-      const n = wear[y * size + x];
-      const k = 0.7 + n * 0.5;
-      d[i] *= k;
-      d[i + 1] *= k;
-      d[i + 2] *= k;
-      height[y * size + x] = 0.5 + (n - 0.5) * 0.5;
-    }
-  }
-  g.putImageData(img, 0, 0);
-  return { albedo: img, normal: normalFromHeight(height, size, 1.6, 0.5, 0.3) };
-}
-
-function floorMat(size, rnd) {
-  const c = canvasOf(size, size);
-  const g = c.getContext('2d');
-  const grain = fbm(size, rnd, 5, 10);
-  const patch = fbm(size, rnd, 3, 3);
+  const grain = fbm(size, rnd, 5, 9);
+  const patch = fbm(size, rnd, 3, 2);
   const height = new Float32Array(size * size);
 
   const img = g.createImageData(size, size);
@@ -331,66 +220,169 @@ function floorMat(size, rnd) {
       const i = (y * size + x) * 4;
       const n = grain[y * size + x];
       const p = patch[y * size + x];
-      const base = 58 + n * 46 + p * 16;
+      const base = 36 + n * 28 + p * 10;
       d[i] = base;
-      d[i + 1] = base * 1.03;
-      d[i + 2] = base * 1.12;
+      d[i + 1] = base * 1.02;
+      d[i + 2] = base * 1.08;
       d[i + 3] = 255;
-      height[y * size + x] = 0.5 + (n - 0.5) * 0.9;
+      height[y * size + x] = 0.5 + (n - 0.5) * 0.8;
     }
   }
   g.putImageData(img, 0, 0);
 
-  // 目地（タイルの継ぎ目）
-  g.strokeStyle = 'rgba(16,18,26,0.75)';
-  g.lineWidth = 3;
-  g.beginPath();
-  g.moveTo(0, size / 2);
-  g.lineTo(size, size / 2);
-  g.moveTo(size / 2, 0);
-  g.lineTo(size / 2, size);
-  g.stroke();
-  for (let y = 0; y < size; y++) {
-    for (let x = 0; x < size; x++) {
-      const near = Math.abs(x - size / 2) < 2 || Math.abs(y - size / 2) < 2;
-      if (near) height[y * size + x] = 0.15;
+  // 白線（破線）とひび割れ
+  g.fillStyle = 'rgba(226,226,214,0.85)';
+  g.fillRect(size / 2 - 4, 20, 8, size * 0.28);
+  g.fillRect(size / 2 - 4, size * 0.58, 8, size * 0.28);
+  g.strokeStyle = 'rgba(18,18,22,0.7)';
+  for (let i = 0; i < 4; i++) {
+    let x = rnd() * size;
+    let y = rnd() * size;
+    g.lineWidth = 1 + rnd();
+    g.beginPath();
+    g.moveTo(x, y);
+    for (let k = 0; k < 10; k++) {
+      x += (rnd() - 0.5) * 30;
+      y += (rnd() - 0.5) * 30;
+      g.lineTo(x, y);
     }
+    g.stroke();
   }
-
-  const out = toImageData(c);
-  // 濡れたような弱い反射
-  return { albedo: out, normal: normalFromHeight(height, size, 2, 0.62, 0.25) };
+  return { albedo: toImageData(c), normal: normalFromHeight(height, size, 1.6, 0.78, 0.2) };
 }
 
-function ceilingMat(size, rnd) {
+function sidewalk(size, rnd) {
   const c = canvasOf(size, size);
   const g = c.getContext('2d');
-  const grain = fbm(size, rnd, 4, 6);
+  const grain = fbm(size, rnd, 4, 8);
   const height = new Float32Array(size * size);
 
-  g.fillStyle = '#1a1f2c';
-  g.fillRect(0, 0, size, size);
-  g.fillStyle = '#232a3a';
-  g.fillRect(0, 0, size, 26);
-  g.fillRect(0, size - 26, size, 26);
-  g.fillStyle = '#2c3446';
-  for (let i = 0; i < 4; i++) g.fillRect(i * (size / 4) + 8, 30, size / 4 - 16, size - 60);
-
-  const img = toImageData(c);
+  const img = g.createImageData(size, size);
   const d = img.data;
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
       const i = (y * size + x) * 4;
       const n = grain[y * size + x];
-      const k = 0.8 + n * 0.35;
-      d[i] *= k;
-      d[i + 1] *= k;
-      d[i + 2] *= k;
-      height[y * size + x] = (y < 28 || y > size - 28 ? 0.8 : 0.4) + n * 0.15;
+      const base = 96 + n * 46;
+      d[i] = base;
+      d[i + 1] = base * 0.99;
+      d[i + 2] = base * 0.96;
+      d[i + 3] = 255;
+      height[y * size + x] = 0.62 + (n - 0.5) * 0.4;
     }
   }
   g.putImageData(img, 0, 0);
-  return { albedo: img, normal: normalFromHeight(height, size, 2, 0.8, 0.15) };
+
+  // 敷石の目地
+  g.strokeStyle = 'rgba(40,40,44,0.6)';
+  g.lineWidth = 3;
+  for (let i = 1; i < 4; i++) {
+    g.beginPath();
+    g.moveTo((i * size) / 4, 0);
+    g.lineTo((i * size) / 4, size);
+    g.moveTo(0, (i * size) / 4);
+    g.lineTo(size, (i * size) / 4);
+    g.stroke();
+    for (let k = 0; k < size; k++) {
+      const p = Math.round((i * size) / 4);
+      for (let o = -1; o <= 1; o++) {
+        height[k * size + Math.min(size - 1, Math.max(0, p + o))] = 0.2;
+        height[Math.min(size - 1, Math.max(0, p + o)) * size + k] = 0.2;
+      }
+    }
+  }
+  return { albedo: toImageData(c), normal: normalFromHeight(height, size, 2, 0.85, 0.15) };
+}
+
+function roof(size, rnd) {
+  const c = canvasOf(size, size);
+  const g = c.getContext('2d');
+  const grain = fbm(size, rnd, 5, 12);
+  const height = new Float32Array(size * size);
+  const img = g.createImageData(size, size);
+  const d = img.data;
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const i = (y * size + x) * 4;
+      const n = grain[y * size + x];
+      const base = 52 + n * 40;
+      d[i] = base;
+      d[i + 1] = base;
+      d[i + 2] = base * 1.05;
+      d[i + 3] = 255;
+      height[y * size + x] = 0.5 + (n - 0.5) * 1;
+    }
+  }
+  g.putImageData(img, 0, 0);
+  g.fillStyle = '#3a3f4a';
+  g.fillRect(40, 40, 70, 50);   // 空調機
+  g.fillStyle = '#4a505c';
+  g.fillRect(46, 46, 58, 12);
+  g.fillStyle = '#2e323c';
+  g.fillRect(160, 150, 46, 46);
+  return { albedo: toImageData(c), normal: normalFromHeight(height, size, 2.2, 0.9, 0.1) };
+}
+
+function shutter(size, rnd) {
+  const c = canvasOf(size, size);
+  const g = c.getContext('2d');
+  const height = new Float32Array(size * size);
+  g.fillStyle = '#2b2f38';
+  g.fillRect(0, 0, size, size);
+  for (let y = 0; y < size; y += 12) {
+    g.fillStyle = y % 24 === 0 ? '#3a404c' : '#333844';
+    g.fillRect(0, y, size, 10);
+    for (let k = 0; k < size; k++) {
+      for (let o = 0; o < 10; o++) height[Math.min(size - 1, y + o) * size + k] = o < 5 ? 0.7 : 0.35;
+    }
+  }
+  const grain = fbm(size, rnd, 3, 6);
+  const img = toImageData(c);
+  const d = img.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const k = 0.85 + grain[i / 4] * 0.3;
+    d[i] *= k; d[i + 1] *= k; d[i + 2] *= k;
+  }
+  return { albedo: img, normal: normalFromHeight(height, size, 2.4, 0.5, 0.2) };
+}
+
+function concrete(size, rnd) {
+  const c = canvasOf(size, size);
+  const g = c.getContext('2d');
+  const grain = fbm(size, rnd, 5, 8);
+  const stains = fbm(size, rnd, 3, 2);
+  const height = new Float32Array(size * size);
+  const img = g.createImageData(size, size);
+  const d = img.data;
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const i = (y * size + x) * 4;
+      const n = grain[y * size + x];
+      const s = stains[y * size + x];
+      const base = 88 + n * 54 - s * 30;
+      d[i] = base;
+      d[i + 1] = base * 1.01;
+      d[i + 2] = base * 1.06;
+      d[i + 3] = 255;
+      height[y * size + x] = 0.5 + (n - 0.5) * 0.7;
+    }
+  }
+  g.putImageData(img, 0, 0);
+  g.strokeStyle = 'rgba(30,32,40,0.5)';
+  for (let i = 0; i < 4; i++) {
+    let x = rnd() * size;
+    let y = rnd() * size;
+    g.lineWidth = 1 + rnd() * 1.4;
+    g.beginPath();
+    g.moveTo(x, y);
+    for (let k = 0; k < 12; k++) {
+      x += (rnd() - 0.5) * 32;
+      y += (rnd() - 0.5) * 32;
+      g.lineTo(x, y);
+    }
+    g.stroke();
+  }
+  return { albedo: toImageData(c), normal: normalFromHeight(height, size, 1.8, 0.9, 0.12) };
 }
 
 let cache = null;
@@ -398,14 +390,25 @@ let cache = null;
 /** 全マテリアルを生成（初回のみ）。順序は MATERIALS の値に対応する。 */
 export function buildMaterials(size = MAT_SIZE) {
   if (cache) return cache;
-  const rnd = rngFrom(20260909);
+  const rnd = rngFrom(20260910);
   cache = [
-    brick(size, rnd),
-    panel(size, rnd),
+    facade(size, rnd, {
+      wall: '#3c3f47', band: '#4a4e58', bands: true, glass: '#171c26', frame: '#2a2e36',
+      cols: 4, rows: 4, inset: 0.16, aspect: 0.72, litRatio: 0.45, relief: 2.4, rough: 0.82,
+    }),
+    facade(size, rnd, {
+      wall: '#1e2836', band: '#2b3849', bands: false, glass: '#101821', frame: '#28323f',
+      cols: 5, rows: 5, inset: 0.08, aspect: 0.88, litRatio: 0.5, relief: 1.6, rough: 0.35,
+    }),
+    facade(size, rnd, {
+      wall: '#5a3a30', band: '#6b473a', bands: true, glass: '#141821', frame: '#3a2820',
+      cols: 3, rows: 4, inset: 0.2, aspect: 0.7, litRatio: 0.38, relief: 2.8, rough: 0.88,
+    }),
+    road(size, rnd),
+    sidewalk(size, rnd),
+    roof(size, rnd),
+    shutter(size, rnd),
     concrete(size, rnd),
-    hazard(size, rnd),
-    floorMat(size, rnd),
-    ceilingMat(size, rnd),
   ];
   return cache;
 }

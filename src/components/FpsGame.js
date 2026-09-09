@@ -207,18 +207,18 @@ export default function FpsGame() {
       if (!g || document.pointerLockElement !== canvas) return;
       g.look(e.movementX * MOUSE_SENS_X, e.movementY * MOUSE_SENS_Y);
     };
+    // ポインターロックが使えない環境（埋め込み iframe など）でも
+    // 左ボタンで射撃できるようにする。押した瞬間にも1発撃つ。
     const onMouseDown = (e) => {
       const g = gameRef.current;
-      if (!g) return;
-      if (phaseRef.current === 'playing' && document.pointerLockElement !== canvas) {
-        canvas.requestPointerLock?.();
-        return;
-      }
-      if (e.button === 0 && phaseRef.current === 'playing') g.input.firing = true;
+      if (!g || e.button !== 0 || phaseRef.current !== 'playing') return;
+      if (document.pointerLockElement !== canvas) canvas.requestPointerLock?.();
+      g.input.firing = true;
+      g.fire();
     };
-    const onMouseUp = () => {
+    const onMouseUp = (e) => {
       const g = gameRef.current;
-      if (g) g.input.firing = false;
+      if (g && (!e || e.button === 0)) g.input.firing = false;
     };
     const onLockChange = () => {
       const g = gameRef.current;
@@ -270,7 +270,18 @@ export default function FpsGame() {
         state.move = { id: e.pointerId, ox: e.clientX, oy: e.clientY };
         setStick({ x, y: e.clientY - rect.top, dx: 0, dy: 0 });
       } else if (state.look === null) {
-        state.look = { id: e.pointerId, x: e.clientX, y: e.clientY, moved: 0, t: performance.now() };
+        state.look = {
+          id: e.pointerId, x: e.clientX, y: e.clientY, moved: 0,
+          t: performance.now(), mouse: e.pointerType === 'mouse',
+        };
+        // マウスは preventDefault で mousedown が来なくなるため、ここで発砲する
+        if (e.pointerType === 'mouse' && e.button === 0) {
+          if (document.pointerLockElement !== canvasRef.current) {
+            canvasRef.current.requestPointerLock?.();
+          }
+          g.input.firing = true;
+          g.fire();
+        }
       }
       if (wrap.setPointerCapture) {
         try { wrap.setPointerCapture(e.pointerId); } catch (err) { /* 無視 */ }
@@ -318,8 +329,11 @@ export default function FpsGame() {
         setStick(null);
       } else if (state.look && state.look.id === e.pointerId) {
         const quick = performance.now() - state.look.t < 260 && state.look.moved < 14;
+        const wasMouse = state.look.mouse;
         state.look = null;
-        if (quick && g && phaseRef.current === 'playing') g.fire(); // タップで単発射撃
+        if (wasMouse) { if (g) g.input.firing = false; }
+        // タップで単発射撃（マウスは押した時点で撃っている）
+        else if (quick && g && phaseRef.current === 'playing') g.fire();
       }
     };
 

@@ -155,11 +155,18 @@
   document.addEventListener('mousemove', (e) => {
     if (usingPointerLock && phase === 'playing') game.look(e.movementX * 0.0022, e.movementY * 0.0016);
   });
+  // ポインターロックの有無にかかわらず、左ボタンで射撃できるようにする。
+  // 押した瞬間にも1発撃つので、一瞬のクリックでも取りこぼさない。
   canvas.addEventListener('mousedown', (e) => {
-    if (phase !== 'playing') return;
-    if (usingPointerLock) { if (e.button === 0) game.input.firing = true; }
+    if (phase !== 'playing' || e.button !== 0) return;
+    if (!usingPointerLock) tryPointerLock();
+    game.input.firing = true;
+    game.fire();
   });
-  window.addEventListener('mouseup', () => { if (usingPointerLock) game.input.firing = false; });
+  window.addEventListener('mouseup', (e) => {
+    if (e.button === 0) game.input.firing = false;
+  });
+  window.addEventListener('blur', () => { game.input.firing = false; });
 
   function tryPointerLock() {
     if (coarse || !canvas.requestPointerLock) return;
@@ -195,7 +202,16 @@
       knob.style.transform = 'translate(0px, 0px)';
       stick.hidden = false;
     } else if (touch.look === null) {
-      touch.look = { id: e.pointerId, x: e.clientX, y: e.clientY, moved: 0, t: performance.now() };
+      touch.look = {
+        id: e.pointerId, x: e.clientX, y: e.clientY, moved: 0,
+        t: performance.now(), mouse: e.pointerType === 'mouse',
+      };
+      // マウスの場合 preventDefault で mousedown が来なくなるため、ここで発砲する
+      if (e.pointerType === 'mouse' && e.button === 0) {
+        tryPointerLock();
+        game.input.firing = true;
+        game.fire();
+      }
     }
     try { root.setPointerCapture(e.pointerId); } catch (err) { /* 無視 */ }
   }, { passive: false });
@@ -232,8 +248,11 @@
       stick.hidden = true;
     } else if (touch.look && touch.look.id === e.pointerId) {
       const quick = performance.now() - touch.look.t < 260 && touch.look.moved < 14;
+      const wasMouse = touch.look.mouse;
       touch.look = null;
-      if (quick && phase === 'playing') game.fire(); // タップ／クリックで単発射撃
+      if (wasMouse) game.input.firing = false;
+      // タップで単発射撃（マウスは押した時点で撃っているので除外）
+      else if (quick && phase === 'playing') game.fire();
     }
   }
   root.addEventListener('pointerup', endPointer);

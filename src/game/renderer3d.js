@@ -14,7 +14,6 @@ import { buildMaterials, MAT_SIZE, MATERIALS } from './materials';
 import { WEAPONS } from './weapons';
 import { mat4, multiply, perspective, lookAt, compose } from './glmath';
 
-const WALL_H = 2.4;   // 壁の高さ（メートル相当）
 const EYE_H = 1.6;    // 視点の高さ
 const MAX_LIGHTS = 12;
 
@@ -169,10 +168,12 @@ ${LIGHT_COMMON}
 out vec4 fragColor;
 
 void main() {
-  vec3 albedo = texture(uAlbedo, vec3(vUv, vLayer)).rgb;
+  vec4 alb = texture(uAlbedo, vec3(vUv, vLayer));
+  vec3 albedo = alb.rgb;
+  float emissiveMask = alb.a;         // 夜のビルの窓
   vec4 nrm = texture(uNormal, vec3(vUv, vLayer));
   float rough = mix(0.85, nrm.a, uNormalMaps);
-  float metal = vLayer < 1.5 && vLayer > 0.5 ? 0.42 : 0.04; // 金属パネルだけ金属寄り
+  float metal = vLayer < 1.5 && vLayer > 0.5 ? 0.55 : 0.05;  // ガラス張りのビルだけ金属寄り // 金属パネルだけ金属寄り
 
   vec3 N = normalize(vNormal);
   if (uNormalMaps > 0.5) {
@@ -183,6 +184,7 @@ void main() {
   }
 
   vec3 color = lighting(vPos, N, albedo, rough, metal, vAo);
+  color += albedo * emissiveMask * 2.2;   // 窓の明かり
   fragColor = vec4(applyFog(color, vPos), 1.0);
 }`;
 
@@ -225,6 +227,40 @@ void main() {
   vec3 color = lighting(vPos, N, uColor, uRough, uMetal, 1.0) + uEmissive
     + uColor * uAmbientBoost * (0.45 + 0.55 * max(dot(N, normalize(uCamPos - vPos)), 0.0));
   fragColor = vec4(applyFog(color, vPos), 1.0);
+}`;
+
+const SKY_FS = `#version 300 es
+precision highp float;
+in vec2 vUv;
+
+uniform vec3 uCamDir;
+uniform float uAspect;
+uniform float uFovScale;
+
+out vec4 fragColor;
+
+float hash(vec2 p) {
+  return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+}
+
+void main() {
+  // 画面座標から視線の高さを求め、地平線からの角度で色を決める
+  float ndcY = vUv.y * 2.0 - 1.0;
+  float elevation = clamp(uCamDir.y + ndcY * uFovScale, -1.0, 1.0);
+
+  vec3 horizon = vec3(0.16, 0.13, 0.19);   // 街明かりで少し明るい地平線
+  vec3 zenith = vec3(0.015, 0.02, 0.045);
+  vec3 col = mix(horizon, zenith, clamp(elevation * 1.6, 0.0, 1.0));
+
+  // 星（地平線より上だけ）
+  if (elevation > 0.05) {
+    vec2 cell = floor(vUv * vec2(uAspect * 220.0, 220.0));
+    float star = hash(cell);
+    if (star > 0.9975) {
+      col += vec3(0.8, 0.85, 1.0) * (star - 0.9975) * 380.0 * smoothstep(0.05, 0.4, elevation);
+    }
+  }
+  fragColor = vec4(col, 1.0);
 }`;
 
 const QUAD_VS = `#version 300 es
@@ -468,6 +504,7 @@ export class Renderer3D {
     this.progBright = program(gl, QUAD_VS, BRIGHT_FS);
     this.progBlur = program(gl, QUAD_VS, BLUR_FS);
     this.progComposite = program(gl, QUAD_VS, COMPOSITE_FS);
+    this.progSky = program(gl, QUAD_VS, SKY_FS);
 
     this.quadVao = this._makeQuad();
     this.box = this._makeObjectMesh(boxMesh());
@@ -553,11 +590,24 @@ export class Renderer3D {
     this.mapTex = gl.createTexture();
   }
 
-  /** 迷路のジオメトリと、影計算用のグリッドテクスチャを作る。 */
+  /**
+   * 街のジオメトリと、影計算用のグリッドテクスチャを作る。
+   *
+   * ・建物はタイルごとに高さが違う「柱」として立てる
+   * ・見えない面（隣も同じ高さの建物）は作らない
+   * ・車道／歩道／広場で床のマテリアルを変え、歩道には段差（縁石）を付ける
+   * ・歩道沿いに街灯を置き、実際の光源として登録する
+   */
   buildMap(map) {
     const gl = this.gl;
-    const { size, tiles } = map;
+    const { size, tiles, heights, kind } = map;
     const solid = (x, y) => (x < 0 || y < 0 || x >= size || y >= size ? 1 : (tiles[y * size + x] ? 1 : 0));
+    const heightAt = (x, y) => {
+      if (x < 0 || y < 0 || x >= size || y >= size) return 18;
+      return tiles[y * size + x] ? (heights ? heights[y * size + x] : 3) : 0;
+    };
+    const layerOf = (x, y) => Math.max(0, (tiles[y * size + x] || 1) - 1);
+    const kindAt = (x, y) => (kind && x >= 0 && y >= 0 && x < size && y < size ? kind[y * size + x] : 0);
 
     const pos = [];
     const nrm = [];
@@ -566,176 +616,160 @@ export class Renderer3D {
     const layer = [];
     const ao = [];
 
-    // 角に近い頂点を暗くする（簡易アンビエントオクルージョン）
-    const cornerAo = (x, z, nx, nz) => {
-      const side1 = solid(Math.floor(x + nz - 0.5), Math.floor(z + nx - 0.5));
-      const side2 = solid(Math.floor(x - nz - 0.5), Math.floor(z - nx - 0.5));
-      return 1 - 0.35 * Math.min(1, side1 + side2);
+    const pushTri = (v, n, t, u, layerIdx, aoV) => {
+      pos.push(v[0], v[1], v[2]);
+      nrm.push(n[0], n[1], n[2]);
+      tan.push(t[0], t[1], t[2]);
+      uv.push(u[0], u[1]);
+      layer.push(layerIdx);
+      ao.push(aoV);
     };
 
-    // 任意の向きの面を1枚追加する（法線 n と接線 t から巻き順を決める）
-    const pushFace = (center, n, t, halfT, halfE, layerIdx, ao, uvScale) => {
-      const e = [
-        t[1] * n[2] - t[2] * n[1],
-        t[2] * n[0] - t[0] * n[2],
-        t[0] * n[1] - t[1] * n[0],
-      ];
-      const v = (a, b) => [
-        center[0] + t[0] * halfT * a + e[0] * halfE * b,
-        center[1] + t[1] * halfT * a + e[1] * halfE * b,
-        center[2] + t[2] * halfT * a + e[2] * halfE * b,
-      ];
-      const us = uvScale || 1;
-      pushQuad(
-        [v(-1, -1), v(1, -1), v(1, 1), v(-1, 1)],
-        n, t,
-        [[0, halfE * 2 * us], [halfT * 2 * us, halfE * 2 * us], [halfT * 2 * us, 0], [0, 0]],
-        layerIdx, [ao, ao, ao, ao],
-      );
+    // 4頂点の面を追加（法線と巻き順を一致させる）
+    const pushQuad = (verts, n, t, uvs, layerIdx, aos) => {
+      for (const i of [0, 2, 1, 0, 3, 2]) pushTri(verts[i], n, t, uvs[i], layerIdx, aos[i]);
     };
 
-    // 直方体（小物）を追加する
-    const pushBox = (cx, cy, cz, sx, sy, sz, layerIdx, ao) => {
-      const hx = sx / 2;
-      const hy = sy / 2;
-      const hz = sz / 2;
-      pushFace([cx, cy, cz - hz], [0, 0, -1], [1, 0, 0], hx, hy, layerIdx, ao, 1);
-      pushFace([cx, cy, cz + hz], [0, 0, 1], [-1, 0, 0], hx, hy, layerIdx, ao, 1);
-      pushFace([cx - hx, cy, cz], [-1, 0, 0], [0, 0, -1], hz, hy, layerIdx, ao, 1);
-      pushFace([cx + hx, cy, cz], [1, 0, 0], [0, 0, 1], hz, hy, layerIdx, ao, 1);
-      pushFace([cx, cy + hy, cz], [0, 1, 0], [1, 0, 0], hx, hz, layerIdx, ao * 1.15, 1);
-      pushFace([cx, cy - hy, cz], [0, -1, 0], [1, 0, 0], hx, hz, layerIdx, ao * 0.6, 1);
-    };
+    const UV_WALL = 2.6;   // 壁テクスチャ1枚あたりのワールド幅
+    const UV_WALL_V = 3.2; // 同・高さ
+    const UV_GROUND = 2.4;
 
-    const pushQuad = (verts, normal, tangent, uvs, layerIdx, aos) => {
-      // 面の向き（法線）と巻き順を一致させる。逆だと背面カリングで消える
-      const order = [0, 2, 1, 0, 3, 2];
-      for (const i of order) {
-        pos.push(verts[i][0], verts[i][1], verts[i][2]);
-        nrm.push(normal[0], normal[1], normal[2]);
-        tan.push(tangent[0], tangent[1], tangent[2]);
-        uv.push(uvs[i][0], uvs[i][1]);
-        layer.push(layerIdx);
-        ao.push(aos[i]);
-      }
-    };
-
-    const matForTile = (t) => {
-      if (t === 1) return MATERIALS.BRICK;
-      if (t === 2) return MATERIALS.PANEL;
-      if (t === 3) return MATERIALS.CONCRETE;
-      return MATERIALS.HAZARD;
-    };
-
-    const vRepeat = WALL_H / 1.2; // 縦方向のテクスチャ繰り返し
-
+    // --- 建物 ---
     for (let y = 0; y < size; y++) {
       for (let x = 0; x < size; x++) {
-        const tile = tiles[y * size + x];
-        if (tile) {
-          const mat = matForTile(tile);
-          // 隣が空いている面だけを作る（内側は見えないので省く）
-          // 接線は「法線と上方向に対して右手系」になる向きを選ぶ。
-          // ここを間違えると面が裏返り、背面カリングで壁が透けて見える
-          const dirs = [
+        const h = heightAt(x, y);
+        if (h <= 0) continue;
+        const mat = layerOf(x, y);
+
+        const sides = [
+          { d: [0, -1], n: [0, 0, -1], t: [1, 0, 0] },
+          { d: [0, 1], n: [0, 0, 1], t: [-1, 0, 0] },
+          { d: [-1, 0], n: [-1, 0, 0], t: [0, 0, -1] },
+          { d: [1, 0], n: [1, 0, 0], t: [0, 0, 1] },
+        ];
+        for (const { d, n, t } of sides) {
+          const nh = heightAt(x + d[0], y + d[1]);
+          if (nh >= h) continue;              // 隣がもっと高ければこの面は見えない
+          const bottom = nh;                  // 低い隣家の屋上から上だけ作る
+          const cx = x + 0.5 + n[0] * 0.5;
+          const cz = y + 0.5 + n[2] * 0.5;
+          const hx = t[0] * 0.5;
+          const hz = t[2] * 0.5;
+          const v0 = [cx - hx, bottom, cz - hz];
+          const v1 = [cx + hx, bottom, cz + hz];
+          const v2 = [cx + hx, h, cz + hz];
+          const v3 = [cx - hx, h, cz - hz];
+          // UV はワールド座標基準にして、隣のタイルと窓の並びを揃える
+          const uAxis = (v) => (Math.abs(n[2]) > 0.5 ? v[0] : v[2]) / UV_WALL;
+          const vTop = 0;
+          const vBottom = (h - bottom) / UV_WALL_V;
+          const uvs = [
+            [uAxis(v0), vBottom], [uAxis(v1), vBottom], [uAxis(v1), vTop], [uAxis(v0), vTop],
+          ];
+          const groundAo = bottom === 0 ? 0.62 : 0.9;
+          pushQuad([v0, v1, v2, v3], n, t, uvs, mat, [groundAo, groundAo, 1, 1]);
+        }
+
+        // 屋上
+        pushQuad(
+          [[x, h, y], [x + 1, h, y], [x + 1, h, y + 1], [x, h, y + 1]],
+          [0, 1, 0], [1, 0, 0],
+          [[x / UV_GROUND, y / UV_GROUND], [(x + 1) / UV_GROUND, y / UV_GROUND],
+            [(x + 1) / UV_GROUND, (y + 1) / UV_GROUND], [x / UV_GROUND, (y + 1) / UV_GROUND]],
+          MATERIALS.ROOF, [1, 1, 1, 1],
+        );
+      }
+    }
+
+    // --- 地面（車道・歩道・広場） ---
+    const CURB = 0.14;
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        if (tiles[y * size + x]) continue;
+        const k = kindAt(x, y);
+        const mat = k === 0 ? MATERIALS.ROAD : k === 1 ? MATERIALS.SIDEWALK : MATERIALS.CONCRETE;
+        const gy = k === 0 ? 0 : CURB;      // 歩道と広場は一段高い
+
+        // 建物際は暗くする
+        const near = solid(x - 1, y) + solid(x + 1, y) + solid(x, y - 1) + solid(x, y + 1);
+        const aoV = 1 - Math.min(0.4, near * 0.12);
+        pushQuad(
+          [[x, gy, y], [x + 1, gy, y], [x + 1, gy, y + 1], [x, gy, y + 1]],
+          [0, 1, 0], [1, 0, 0],
+          [[x / UV_GROUND, y / UV_GROUND], [(x + 1) / UV_GROUND, y / UV_GROUND],
+            [(x + 1) / UV_GROUND, (y + 1) / UV_GROUND], [x / UV_GROUND, (y + 1) / UV_GROUND]],
+          mat, [aoV, aoV, aoV, aoV],
+        );
+
+        // 縁石（車道に面した側）
+        if (gy > 0) {
+          const curbSides = [
             { d: [0, -1], n: [0, 0, -1], t: [1, 0, 0] },
             { d: [0, 1], n: [0, 0, 1], t: [-1, 0, 0] },
             { d: [-1, 0], n: [-1, 0, 0], t: [0, 0, -1] },
             { d: [1, 0], n: [1, 0, 0], t: [0, 0, 1] },
           ];
-          for (const { d, n, t } of dirs) {
-            if (solid(x + d[0], y + d[1])) continue;
+          for (const { d, n, t } of curbSides) {
+            const nx = x + d[0];
+            const ny = y + d[1];
+            if (nx < 0 || ny < 0 || nx >= size || ny >= size) continue;
+            if (tiles[ny * size + nx] || kindAt(nx, ny) !== 0) continue;
             const cx = x + 0.5 + n[0] * 0.5;
             const cz = y + 0.5 + n[2] * 0.5;
             const hx = t[0] * 0.5;
             const hz = t[2] * 0.5;
-            const aoBase = 1;
-            const verts = [
-              [cx - hx, 0, cz - hz],
-              [cx + hx, 0, cz + hz],
-              [cx + hx, WALL_H, cz + hz],
-              [cx - hx, WALL_H, cz - hz],
-            ];
-            // 床に近いほど暗く（接地の陰）
-            pushQuad(verts, n, t, [[0, vRepeat], [1, vRepeat], [1, 0], [0, 0]], mat,
-              [aoBase * 0.55, aoBase * 0.55, aoBase, aoBase]);
+            pushQuad(
+              [[cx - hx, 0, cz - hz], [cx + hx, 0, cz + hz], [cx + hx, CURB, cz + hz], [cx - hx, CURB, cz - hz]],
+              n, t,
+              [[0, 0.06], [0.42, 0.06], [0.42, 0], [0, 0]],
+              MATERIALS.CONCRETE, [0.7, 0.7, 1, 1],
+            );
           }
-          continue;
         }
-
-        // 床と天井
-        const aoF = [
-          cornerAo(x, y, 1, 0), cornerAo(x + 1, y, 1, 0),
-          cornerAo(x + 1, y + 1, 1, 0), cornerAo(x, y + 1, 1, 0),
-        ];
-        pushQuad(
-          [[x, 0, y], [x + 1, 0, y], [x + 1, 0, y + 1], [x, 0, y + 1]],
-          [0, 1, 0], [1, 0, 0],
-          [[x, y], [x + 1, y], [x + 1, y + 1], [x, y + 1]],
-          MATERIALS.FLOOR, aoF,
-        );
-        pushQuad(
-          [[x, WALL_H, y + 1], [x + 1, WALL_H, y + 1], [x + 1, WALL_H, y], [x, WALL_H, y]],
-          [0, -1, 0], [1, 0, 0],
-          [[x, y + 1], [x + 1, y + 1], [x + 1, y], [x, y]],
-          MATERIALS.CEILING, [0.75, 0.75, 0.75, 0.75],
-        );
       }
     }
 
-    // ------- 小物と天井照明を置いて、通路の単調さをなくす -------
+    // --- 街灯（ポールは静的ジオメトリ、明かりは点光源） ---
     this.mapLights = [];
-    let seed = 987654321;
-    const rnd = () => {
-      seed = (seed * 1664525 + 1013904223) >>> 0;
-      return seed / 4294967296;
+    this.lampHeads = [];
+    const pushBox = (cx, cy, cz, sx, sy, sz, layerIdx, aoV) => {
+      const faces = [
+        { n: [0, 0, -1], t: [1, 0, 0], hw: sx / 2, hh: sy / 2, c: [cx, cy, cz - sz / 2] },
+        { n: [0, 0, 1], t: [-1, 0, 0], hw: sx / 2, hh: sy / 2, c: [cx, cy, cz + sz / 2] },
+        { n: [-1, 0, 0], t: [0, 0, -1], hw: sz / 2, hh: sy / 2, c: [cx - sx / 2, cy, cz] },
+        { n: [1, 0, 0], t: [0, 0, 1], hw: sz / 2, hh: sy / 2, c: [cx + sx / 2, cy, cz] },
+      ];
+      for (const f of faces) {
+        const e = [0, 1, 0];
+        const v = (a, b) => [
+          f.c[0] + f.t[0] * f.hw * a + e[0] * f.hh * b,
+          f.c[1] + f.t[1] * f.hw * a + e[1] * f.hh * b,
+          f.c[2] + f.t[2] * f.hw * a + e[2] * f.hh * b,
+        ];
+        pushQuad([v(-1, -1), v(1, -1), v(1, 1), v(-1, 1)], f.n, f.t,
+          [[0, 0.3], [0.3, 0.3], [0.3, 0], [0, 0]], layerIdx, [aoV, aoV, aoV, aoV]);
+      }
     };
-    const openCells = [];
-    for (let y = 1; y < size - 1; y++) {
-      for (let x = 1; x < size - 1; x++) if (!tiles[y * size + x]) openCells.push([x, y]);
-    }
 
-    for (const [x, y] of openCells) {
-      const wallN = solid(x, y - 1);
-      const wallS = solid(x, y + 1);
-      const wallW = solid(x - 1, y);
-      const wallE = solid(x + 1, y);
-      const open = 4 - (wallN + wallS + wallW + wallE);
-      const r = rnd();
-
-      // 天井の照明（実際に光る）
-      if ((x + y * 3) % 7 === 0 && r < 0.75) {
-        pushBox(x + 0.5, WALL_H - 0.06, y + 0.5, 0.5, 0.08, 0.16, MATERIALS.PANEL, 1.1);
-        const warm = rnd() < 0.65;
+    for (let y = 2; y < size - 2; y++) {
+      for (let x = 2; x < size - 2; x++) {
+        if (tiles[y * size + x] || kindAt(x, y) !== 1) continue;
+        if ((x * 7 + y * 13) % 9 !== 0) continue;
+        // 車道に面した歩道にだけ置く
+        const roadSide = [[1, 0], [-1, 0], [0, 1], [0, -1]]
+          .find(([dx, dy]) => !tiles[(y + dy) * size + (x + dx)] && kindAt(x + dx, y + dy) === 0);
+        if (!roadSide) continue;
+        const px = x + 0.5;
+        const pz = y + 0.5;
+        pushBox(px, CURB + 1.8, pz, 0.1, 3.6, 0.1, MATERIALS.CONCRETE, 0.9);
+        pushBox(px + roadSide[0] * 0.35, CURB + 3.5, pz + roadSide[1] * 0.35, 0.7, 0.1, 0.7, MATERIALS.CONCRETE, 1);
+        const hx = px + roadSide[0] * 0.55;
+        const hz = pz + roadSide[1] * 0.55;
+        this.lampHeads.push([hx, CURB + 3.35, hz]);
         this.mapLights.push({
-          x: x + 0.5, y: WALL_H - 0.2, z: y + 0.5,
-          r: warm ? 1.5 : 0.5, g: warm ? 1.25 : 1.3, b: warm ? 0.85 : 1.7,
-          range: 5.2,
+          x: hx, y: CURB + 3.3, z: hz,
+          r: 5.5, g: 4.6, b: 3.0, range: 11,
         });
-      }
-
-      // 壁際の木箱・ドラム缶
-      if (open <= 3 && r > 0.62) {
-        const along = wallW || wallE;
-        const ox = wallW ? -0.3 : wallE ? 0.3 : (rnd() - 0.5) * 0.5;
-        const oz = wallN ? -0.3 : wallS ? 0.3 : (rnd() - 0.5) * 0.5;
-        if (rnd() < 0.5) {
-          const h = 0.45 + rnd() * 0.25;
-          pushBox(x + 0.5 + ox, h / 2, y + 0.5 + oz, 0.5, h, 0.5, MATERIALS.HAZARD, 0.85);
-          if (rnd() < 0.4) pushBox(x + 0.5 + ox, h + 0.2, y + 0.5 + oz, 0.36, 0.4, 0.36, MATERIALS.PANEL, 0.9);
-        } else {
-          pushBox(x + 0.5 + ox, 0.35, y + 0.5 + oz, 0.42, 0.7, 0.42, MATERIALS.CONCRETE, 0.85);
-          if (along) pushBox(x + 0.5 + ox, 0.72, y + 0.5 + oz, 0.46, 0.05, 0.46, MATERIALS.PANEL, 1);
-        }
-      }
-
-      // 壁沿いの配管
-      if (open <= 2 && r < 0.3) {
-        const height = 1.85 + rnd() * 0.3;
-        if (wallW) pushBox(x + 0.12, height, y + 0.5, 0.14, 0.14, 1, MATERIALS.PANEL, 0.95);
-        else if (wallE) pushBox(x + 0.88, height, y + 0.5, 0.14, 0.14, 1, MATERIALS.PANEL, 0.95);
-        else if (wallN) pushBox(x + 0.5, height, y + 0.12, 1, 0.14, 0.14, MATERIALS.PANEL, 0.95);
-        else if (wallS) pushBox(x + 0.5, height, y + 0.88, 1, 0.14, 0.14, MATERIALS.PANEL, 0.95);
       }
     }
 
@@ -758,6 +792,7 @@ export class Renderer3D {
     bind('aAo', ao, 1);
     gl.bindVertexArray(null);
 
+    if (this.mapMesh) gl.deleteVertexArray(this.mapMesh.vao);
     this.mapMesh = { vao, count: pos.length / 3 };
     this.mapSize = size;
 
@@ -840,13 +875,13 @@ export class Renderer3D {
     const q = this.quality;
     gl.uniform3fv(u.uCamPos, camPos);
     gl.uniform3fv(u.uCamDir, camDir);
-    gl.uniform1f(u.uHeadlight, 1.6);
+    gl.uniform1f(u.uHeadlight, 0.55);
     gl.uniform1f(u.uShadows, q.shadows ? 1 : 0);
     gl.uniform1f(u.uMapSize, this.mapSize);
-    gl.uniform3f(u.uAmbientSky, 0.075, 0.095, 0.14);
-    gl.uniform3f(u.uAmbientGround, 0.032, 0.036, 0.045);
-    gl.uniform1f(u.uFogDensity, 0.0034);
-    gl.uniform3f(u.uFogColor, 0.05, 0.06, 0.09);
+    gl.uniform3f(u.uAmbientSky, 0.07, 0.075, 0.115);
+    gl.uniform3f(u.uAmbientGround, 0.028, 0.028, 0.036);
+    gl.uniform1f(u.uFogDensity, 0.0016);
+    gl.uniform3f(u.uFogColor, 0.13, 0.11, 0.16);
 
     const lights = this._gatherLights(game);
     gl.uniform1i(u.uLightCount, lights.count);
@@ -884,7 +919,7 @@ export class Renderer3D {
     if (this.mapLights) {
       const near = this.mapLights
         .map((L) => ({ L, d: (L.x - p.x) ** 2 + (L.z - p.y) ** 2 }))
-        .filter((e) => e.d < 90)
+        .filter((e) => e.d < 200)
         .sort((a, b) => a.d - b.d)
         .slice(0, 5);
       for (const { L } of near) add(L.x, L.y, L.z, L.r, L.g, L.b, L.range);
@@ -944,11 +979,23 @@ export class Renderer3D {
 
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.sceneTarget.fbo);
     gl.viewport(0, 0, this.width, this.height);
+    gl.clearColor(0.02, 0.025, 0.04, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+    // --- 夜空（奥行きなしで先に敷く）---
+    gl.disable(gl.DEPTH_TEST);
+    gl.disable(gl.CULL_FACE);
+    gl.useProgram(this.progSky.p);
+    gl.uniform3fv(this.progSky.uniforms.uCamDir, camDir);
+    gl.uniform1f(this.progSky.uniforms.uAspect, aspect);
+    gl.uniform1f(this.progSky.uniforms.uFovScale, Math.tan(fov / 2));
+    gl.bindVertexArray(this.quadVao);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    gl.bindVertexArray(null);
+
     gl.enable(gl.DEPTH_TEST);
     gl.enable(gl.CULL_FACE);
     gl.cullFace(gl.BACK);
-    gl.clearColor(0.02, 0.025, 0.04, 1);
-    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
     // --- 迷路 ---
     gl.useProgram(this.progWorld.p);
@@ -968,6 +1015,7 @@ export class Renderer3D {
     gl.useProgram(this.progObject.p);
     gl.uniformMatrix4fv(this.progObject.uniforms.uViewProj, false, this.viewProj);
     this._setLightUniforms(this.progObject, game, camPos, camDir);
+    this._drawLamps(camPos);
     this._drawEntities(game);
 
     // 手に持った武器は世界とは別レイヤー扱いにして、壁にめり込ませない
@@ -978,6 +1026,17 @@ export class Renderer3D {
     gl.disable(gl.DEPTH_TEST);
     gl.disable(gl.CULL_FACE);
     this._postProcess();
+  }
+
+  /** 近くの街灯の発光部を描く。 */
+  _drawLamps(camPos) {
+    if (!this.lampHeads) return;
+    for (const [x, y, z] of this.lampHeads) {
+      const d2 = (x - camPos[0]) ** 2 + (z - camPos[2]) ** 2;
+      if (d2 > 900) continue;
+      compose(this.model, [x, y, z], 0, 0, [0.34, 0.12, 0.34]);
+      this._drawMesh(this.box, this.model, [1, 0.94, 0.8], [3.2, 2.7, 1.7], 0.3, 0.2);
+    }
   }
 
   _drawEntities(game) {

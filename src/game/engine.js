@@ -7,7 +7,8 @@
  */
 
 import { getAssetSet, getFloorTextures } from './textures';
-import { generateMap, createRng } from './mapGen';
+import { createRng } from './mapGen';
+import { generateCity } from './cityGen';
 import { Sfx } from './audio';
 import { GL_QUALITY, RENDER_2D } from './fidelity';
 import { Renderer3D } from './renderer3d';
@@ -317,7 +318,7 @@ export class Game {
     this.difficulty = d;
     const rnd = createRng((Math.random() * 0xffffffff) >>> 0);
     this.rnd = rnd;
-    this.map = generateMap(rnd);
+    this.map = generateCity(rnd, 1);
     if (this.gl3d) this.gl3d.buildMap(this.map);
     this.flow = new Int16Array(this.map.size * this.map.size);
     this.flowQueue = new Int32Array(this.map.size * this.map.size);
@@ -342,8 +343,9 @@ export class Game {
     const first = createWeaponState('blaster');
     first.stats = statsFor(WEAPONS.blaster, 1);
     first.reserve = Math.round(first.reserve * (d.ammo / 48));
+    const spawn = this.map.spawn || [1.5, 1.5];
     this.player = {
-      x: 1.5, y: 1.5, angle: 0.7,
+      x: spawn[0], y: spawn[1], angle: 0.7,
       hp: d.hp, maxHp: d.hp,
       score: 0,
       fireCd: 0, recoil: 0, flash: 0, hurtT: 0,
@@ -354,9 +356,7 @@ export class Game {
       switchT: 0, switchTotal: 0, pendingSlot: -1,
     };
     this.applyTier(RENDER_2D, true);
-    // 開けている方向を向いて開始する
-    if (!this.isWall(2.5, 1.5)) this.player.angle = 0;
-    else if (!this.isWall(1.5, 2.5)) this.player.angle = Math.PI / 2;
+    this.faceOpenDirection();
 
     this.state = 'playing';
     this.sfx.resume();
@@ -364,9 +364,43 @@ export class Game {
     this.emitState();
   }
 
+  /** 一番開けている方向を向く。 */
+  faceOpenDirection() {
+    const p = this.player;
+    let best = p.angle;
+    let bestDist = 0;
+    for (let a = 0; a < Math.PI * 2; a += 0.15) {
+      const d = this.castRay(p.x, p.y, Math.cos(a), Math.sin(a)).dist;
+      if (d > bestDist) { bestDist = d; best = a; }
+    }
+    p.angle = best;
+  }
+
+  /** 次のエリア（新しい街並み）へ移動する。 */
+  changeArea() {
+    this.map = generateCity(this.rnd, this.wave);
+    if (this.gl3d) this.gl3d.buildMap(this.map);
+    const cells = this.map.size * this.map.size;
+    this.flow = new Int16Array(cells);
+    this.flowQueue = new Int32Array(cells);
+    this.flowCell = -1;
+
+    const spawn = this.map.spawn || [1.5, 1.5];
+    this.player.x = spawn[0];
+    this.player.y = spawn[1];
+    this.enemies.length = 0;
+    this.projectiles.length = 0;
+    this.pickups.length = 0;
+    this.faceOpenDirection();
+    this.computeFlowField();
+    this.onEvent('newarea', { wave: this.wave });
+  }
+
   startWave() {
     this.wave++;
     const d = this.difficulty;
+    // ウェーブごとに街並みが変わる
+    if (this.wave > 1) this.changeArea();
 
     // 新しい武器が解放されるウェーブなら、武器ケースを配置する
     for (const id of WEAPON_IDS) {
@@ -376,7 +410,7 @@ export class Game {
         break;
       }
     }
-    const count = Math.max(3, Math.min(16, Math.round((3 + this.wave * 1.6) * d.count)));
+    const count = Math.max(4, Math.min(20, Math.round((4 + this.wave * 1.8) * d.count)));
     this.spawnQueue = [];
     for (let i = 0; i < count; i++) {
       this.spawnQueue.push({ type: this.pickEnemyType(), t: 0.25 + i * 0.35 });
@@ -1626,7 +1660,7 @@ export class Game {
     const pad = 12 * this.uiScale;
     const x0 = this.W - size - pad;
     const y0 = pad;
-    const radius = 8.5; // 表示するタイル半径
+    const radius = 15; // 表示するタイル半径（街が広いので広め）
     const cell = size / (radius * 2);
 
     ctx.save();
