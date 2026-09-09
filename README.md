@@ -28,6 +28,33 @@ Todo アプリのヘッダーやログイン画面のリンクからも入れま
 - 弾薬箱・救急箱を拾って生き延び、ハイスコア（`localStorage` に保存）を更新しましょう。
 - 難易度は かんたん／ふつう／むずかしい の 3 段階。
 
+### 遊ぶには（ローカル起動）
+
+```bash
+npm install
+npm start          # http://localhost:3000/fps が開きます
+```
+
+`localhost` は「その開発サーバーを動かしているPC」でしか開けません。スマホから遊ぶ場合は、
+同じWi-Fi内であれば `npm start` のログに出る `On Your Network:` のURL（例 `http://192.168.x.x:3000/fps`）を
+スマホのブラウザで開いてください。
+
+### 公開する（Netlify）
+
+このリポジトリには `netlify.toml` と `public/_redirects` を同梱しているので、
+Netlify に GitHub リポジトリを接続するだけで公開できます（`/fps` を直接開いても404になりません）。
+
+1. <https://app.netlify.com> → **Add new site → Import an existing project → GitHub**
+2. `NewEngineer0917/bive-code` を選び、デプロイするブランチを指定
+3. Build command `npm run build` / Publish directory `build`（`netlify.toml` により自動設定）
+
+CLI から公開する場合:
+
+```bash
+npm run build
+npx netlify-cli deploy --prod --dir=build
+```
+
 ### 実装ファイル
 
 | ファイル | 役割 |

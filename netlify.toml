@@ -1,0 +1,10 @@
+# Netlify 用設定（Git連携でデプロイする場合にも使われる）
+[build]
+  command = "npm run build"
+  publish = "build"
+
+# React Router のパス（/fps など）を直接開いても 404 にしない
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
