@@ -6,19 +6,20 @@
  * - 入力（キーボード / マウス / タッチ）は React 側から setInput 経由で受け取る
  */
 
-import { buildAssets, SHADE_LEVELS } from './textures';
+import { getAssetSet, getFloorTextures } from './textures';
 import { generateMap, createRng } from './mapGen';
 import { Sfx } from './audio';
+import { TIERS, tierForWave, weaponForXp, weaponProgress } from './fidelity';
 
 const TAU = Math.PI * 2;
 const PLAYER_RADIUS = 0.22;
 const WALK_SPEED = 3.1;
 const SPRINT_SPEED = 4.5;
 const KEY_TURN_SPEED = 2.6;
-const MAX_AMMO = 99;
-const FIRE_INTERVAL = 0.14;
-const BULLET_DAMAGE = 34;
 const FOG_DISTANCE = 13;
+
+/* 撃破で得られる武器XP */
+const XP_BY_TYPE = { drone: 1, gunner: 2, brute: 4 };
 
 export const DIFFICULTIES = {
   easy: { key: 'easy', label: 'かんたん', hp: 140, ammo: 64, dmg: 0.65, spd: 0.9, count: 0.8 },
@@ -43,6 +44,54 @@ const ENEMY_TYPES = {
 
 const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 
+/**
+ * 固定パレットへの最近色変換テーブル（5bit RGB → パレット色）。
+ * ドット絵ティアで画面全体を 16 色などに丸めるために使う。
+ */
+const lutCache = new Map();
+
+function paletteLut(palette) {
+  const key = palette.join('');
+  if (lutCache.has(key)) return lutCache.get(key);
+
+  const colors = palette.map((hex) => [
+    parseInt(hex.slice(1, 3), 16),
+    parseInt(hex.slice(3, 5), 16),
+    parseInt(hex.slice(5, 7), 16),
+  ]);
+  const lut = new Uint8Array(32 * 32 * 32 * 3);
+  for (let r = 0; r < 32; r++) {
+    for (let g = 0; g < 32; g++) {
+      for (let b = 0; b < 32; b++) {
+        const R = r * 8;
+        const G = g * 8;
+        const B = b * 8;
+        let best = 0;
+        let bestD = Infinity;
+        for (let i = 0; i < colors.length; i++) {
+          const c = colors[i];
+          const d = (c[0] - R) ** 2 + (c[1] - G) ** 2 + (c[2] - B) ** 2;
+          if (d < bestD) { bestD = d; best = i; }
+        }
+        const idx = ((r << 10) | (g << 5) | b) * 3;
+        lut[idx] = colors[best][0];
+        lut[idx + 1] = colors[best][1];
+        lut[idx + 2] = colors[best][2];
+      }
+    }
+  }
+  lutCache.set(key, lut);
+  return lut;
+}
+
+/** 階調を n 段に丸めるルックアップテーブル。 */
+function quantizeLut(n) {
+  const lut = new Uint8Array(256);
+  const step = 255 / (n - 1);
+  for (let i = 0; i < 256; i++) lut[i] = Math.round(Math.round(i / step) * step);
+  return lut;
+}
+
 function normAngle(a) {
   while (a > Math.PI) a -= TAU;
   while (a < -Math.PI) a += TAU;
@@ -53,7 +102,6 @@ export class Game {
   constructor(canvas, { onEvent } = {}) {
     this.canvas = canvas;
     this.ctx = canvas.getContext('2d', { alpha: false });
-    this.assets = buildAssets();
     this.sfx = new Sfx();
     this.onEvent = onEvent || (() => {});
 
@@ -82,6 +130,22 @@ export class Game {
     this._shades = [];
     for (let i = 0; i <= 24; i++) this._shades.push(`rgba(6,8,18,${(i / 24).toFixed(3)})`);
 
+    // 描画は一度オフスクリーンに描いてから画面へ引き伸ばす。
+    // このバッファの解像度と後処理がティアごとの「時代」を作る。
+    this.buf = document.createElement('canvas');
+    this.bctx = this.buf.getContext('2d', { alpha: false });
+    this.bloomBuf = document.createElement('canvas');
+    this.lights = [];
+
+    this.tier = TIERS[0];
+    this.assets = getAssetSet(this.tier.assetSet);
+    this.paletteLut = null;
+
+    // 描画負荷に応じて解像度を自動調整する（弱い端末でも 60fps を保つため）
+    this.quality = 1;
+    this._frameAvg = 16;
+    this._qualityTimer = 0;
+
     this.resize();
   }
 
@@ -106,8 +170,29 @@ export class Game {
     if (!isFinite(dt) || dt <= 0) dt = 1 / 60;
     dt = Math.min(dt, 0.05);
     if (this.state === 'playing') this.update(dt);
-    this.render(dt);
+    this.render();
+    this.autoQuality(dt);
   };
+
+  /**
+   * 直近のフレーム時間から解像度を上下させる。
+   * 重ければ落として滑らかさを優先し、余裕があれば徐々に戻す。
+   */
+  autoQuality(dt) {
+    this._frameAvg += (dt * 1000 - this._frameAvg) * 0.05;
+    this._qualityTimer += dt;
+    if (this._qualityTimer < 1.5 || this.state !== 'playing') return;
+    this._qualityTimer = 0;
+
+    let next = this.quality;
+    if (this._frameAvg > 26 && this.quality > 0.55) next = Math.max(0.55, this.quality - 0.15);
+    else if (this._frameAvg < 14 && this.quality < 1) next = Math.min(1, this.quality + 0.1);
+    if (next !== this.quality) {
+      this.quality = next;
+      this.applyTier(this.tier, true);
+      this._frameAvg = 16;
+    }
+  }
 
   resize() {
     const rect = this.canvas.getBoundingClientRect();
@@ -120,32 +205,70 @@ export class Game {
 
     this.canvas.width = Math.round(cssW * dpr);
     this.canvas.height = Math.round(cssH * dpr);
-    this.ctx.imageSmoothingEnabled = false;
     this.W = this.canvas.width;
     this.H = this.canvas.height;
-
-    // 1 本のレイが担当する横幅（端末性能に応じて解像度を落とす）
-    const targetRays = coarse ? 300 : 460;
-    this.colW = Math.max(2, Math.ceil(this.W / targetRays));
-    this.rays = Math.ceil(this.W / this.colW);
-    this.zbuf = new Float32Array(this.rays);
+    this.coarse = coarse;
 
     // 画角：横長なら広く、縦長では狭くして歪みを防ぐ
     const aspect = this.W / this.H;
     const hFovDeg = aspect >= 1.5 ? 78 : aspect >= 1 ? 72 : 56;
     this.planeLen = Math.tan((hFovDeg * Math.PI) / 360);
-    // 正方形ピクセルを保つ投影係数（1 単位の壁が距離 1 で占める画面高の割合）
-    this.proj = clamp(this.W / 2 / (this.planeLen * this.H), 0.4, 1.25);
     this.uiScale = clamp(Math.min(this.W, this.H) / 720, 0.6, 2.4);
 
-    const g1 = this.ctx.createLinearGradient(0, 0, 0, this.H * 0.5);
+    this.applyTier(this.tier, true);
+  }
+
+  /**
+   * 描画ティアを適用する。
+   * オフスクリーンバッファの解像度、アセットの粗さ、後処理、音の質感が
+   * すべてここで切り替わる。
+   */
+  applyTier(tier, force = false) {
+    if (!force && this.tier === tier) return;
+    this.tier = tier;
+    this.assets = getAssetSet(tier.assetSet);
+    this.sfx.setTier(tier.audio);
+
+    // バッファ解像度（モバイルでは上限を下げる）
+    const cap = Math.round(tier.maxWidth * (this.coarse ? 0.72 : 1) * this.quality);
+    const bw = Math.max(160, Math.min(cap, Math.round(this.W * tier.scale * this.quality)));
+    const bh = Math.max(90, Math.round((bw * this.H) / this.W));
+    this.buf.width = bw;
+    this.buf.height = bh;
+    this.bufW = bw;
+    this.bufH = bh;
+    this.bloomBuf.width = Math.max(32, Math.round(bw / 3));
+    this.bloomBuf.height = Math.max(18, Math.round(bh / 3));
+
+    // 解像度が高いティアは 1 レイ＝2px にして壁のループ回数を抑える
+    this.colW = bw >= 700 ? 2 : 1;
+    this.rays = Math.ceil(bw / this.colW);
+    this.zbuf = new Float32Array(this.rays);
+    this.hitX = new Float32Array(this.rays);
+    this.hitY = new Float32Array(this.rays);
+
+    // 減色用のルックアップテーブル（毎フレームの除算を避ける）
+    this.levelLut = tier.colorLevels ? quantizeLut(tier.colorLevels) : null;
+
+    // 床テクスチャ描画用のバッファ（読み戻しを避けるため毎フレーム全上書きする）
+    this.floorBand = null;
+
+    // 正方形ピクセルを保つ投影係数（1 単位の壁が距離 1 で占める画面高の割合）
+    this.proj = clamp(bw / 2 / (this.planeLen * bh), 0.4, 1.25);
+
+    this.bctx.imageSmoothingEnabled = false;
+
+    const g1 = this.bctx.createLinearGradient(0, 0, 0, bh * 0.5);
     g1.addColorStop(0, '#05060d');
     g1.addColorStop(1, '#1b2138');
     this.ceilGrad = g1;
-    const g2 = this.ctx.createLinearGradient(0, this.H * 0.5, 0, this.H);
+    const g2 = this.bctx.createLinearGradient(0, bh * 0.5, 0, bh);
     g2.addColorStop(0, '#171a24');
     g2.addColorStop(1, '#3a3f52');
     this.floorGrad = g2;
+
+    this.paletteLut = tier.palette ? paletteLut(tier.palette) : null;
+    this.floorTex = tier.floor === 'textured' ? getFloorTextures() : null;
   }
 
   /* --------------------------------- ゲーム進行 -------------------------------- */
@@ -173,12 +296,18 @@ export class Game {
     this.shake = 0;
     this.bob = 0;
 
+    // 各ティアのアセットを先に作っておき、進化のたびに固まらないようにする
+    for (let i = 0; i < 3; i++) getAssetSet(i);
+
+    const weapon = weaponForXp(0);
     this.player = {
       x: 1.5, y: 1.5, angle: 0.7,
       hp: d.hp, maxHp: d.hp,
       ammo: d.ammo, score: 0,
       fireCd: 0, recoil: 0, flash: 0, hurtT: 0,
+      xp: 0, weapon,
     };
+    this.applyTier(tierForWave(1), true);
     // 開けている方向を向いて開始する
     if (!this.isWall(2.5, 1.5)) this.player.angle = 0;
     else if (!this.isWall(1.5, 2.5)) this.player.angle = Math.PI / 2;
@@ -192,6 +321,14 @@ export class Game {
   startWave() {
     this.wave++;
     const d = this.difficulty;
+
+    // ウェーブが進むごとに描画・音の「時代」が 1 段進む
+    const tier = tierForWave(this.wave);
+    if (tier !== this.tier) {
+      this.applyTier(tier);
+      this.sfx.tierUp();
+      this.onEvent('tier', { label: tier.label, note: tier.note, id: tier.id });
+    }
     const count = Math.max(3, Math.min(16, Math.round((3 + this.wave * 1.6) * d.count)));
     this.spawnQueue = [];
     for (let i = 0; i < count; i++) {
@@ -201,6 +338,7 @@ export class Game {
     this.spawnPickup('ammo');
     this.spawnPickup('ammo');
     if (this.wave % 2 === 0) this.spawnPickup('health');
+    if (this.wave >= 2) this.spawnPickup('core'); // 武器強化コア
     this.sfx.wave();
     this.onEvent('wave', { wave: this.wave });
   }
@@ -274,16 +412,25 @@ export class Game {
   getHud() {
     const p = this.player;
     if (!p) return { hp: 0, maxHp: 100, ammo: 0, score: 0, wave: 0, enemies: 0, hurt: 0 };
+    const prog = weaponProgress(p.xp);
     return {
       hp: Math.max(0, Math.ceil(p.hp)),
       maxHp: p.maxHp,
       ammo: p.ammo,
+      maxAmmo: p.weapon.magazine,
       score: p.score,
       wave: this.wave,
       enemies: this.enemies.filter((e) => !e.dying).length + this.spawnQueue.length,
       hurt: clamp(p.hurtT / 0.5, 0, 1),
       kills: this.kills,
       time: this.elapsed,
+      weapon: p.weapon.name,
+      weaponLevel: p.weapon.level,
+      weaponPerk: p.weapon.perk,
+      weaponRatio: prog.ratio,
+      weaponMax: !prog.next,
+      tier: this.tier.label,
+      tierId: this.tier.id,
     };
   }
 
@@ -432,6 +579,7 @@ export class Game {
     p.hurtT = Math.max(0, p.hurtT - dt);
     this.shake = Math.max(0, this.shake - dt * 2.2);
 
+    this.pitchBuf = this.pitch * this.bufH;
     this.updatePlayer(dt);
     if (this.input.firing) this.fire();
 
@@ -464,7 +612,8 @@ export class Game {
         this.waveBreak = 2.6;
         p.score += 200 * this.wave;
         p.hp = Math.min(p.maxHp, p.hp + 15);
-        p.ammo = Math.min(MAX_AMMO, p.ammo + 12);
+        p.ammo = Math.min(p.weapon.magazine, p.ammo + 12);
+        this.addWeaponXp(3);
         this.onEvent('waveclear', { wave: this.wave });
       } else {
         this.waveBreak -= dt;
@@ -652,8 +801,10 @@ export class Game {
       it.anim += dt;
       if (Math.hypot(it.x - p.x, it.y - p.y) > 0.55) continue;
       if (it.kind === 'ammo') {
-        if (p.ammo >= MAX_AMMO) continue;
-        p.ammo = Math.min(MAX_AMMO, p.ammo + 16);
+        if (p.ammo >= p.weapon.magazine) continue;
+        p.ammo = Math.min(p.weapon.magazine, p.ammo + 16);
+      } else if (it.kind === 'core') {
+        this.addWeaponXp(5);
       } else {
         if (p.hp >= p.maxHp) continue;
         p.hp = Math.min(p.maxHp, p.hp + 28);
@@ -682,39 +833,88 @@ export class Game {
 
   /* ---------------------------------- 射撃 ---------------------------------- */
 
-  /** 画面中央（照準）にいる敵を返す。 */
-  aimTarget(spread = 0) {
+  /**
+   * 指定角度の射線上にいる敵を、近い順に最大 max 体返す。
+   * 貫通武器はここで複数体を拾う。
+   */
+  aimTargets(spread = 0, max = 1) {
     const p = this.player;
-    if (!p) return { enemy: null };
+    if (!p) return [];
     const angle = p.angle + spread;
     const dirX = Math.cos(angle);
     const dirY = Math.sin(angle);
     const wall = this.castRay(p.x, p.y, dirX, dirY).dist;
 
-    let best = null;
-    let bestDist = Infinity;
+    const hits = [];
     for (const e of this.enemies) {
       if (e.dying) continue;
       const dx = e.x - p.x;
       const dy = e.y - p.y;
       const dist = Math.hypot(dx, dy);
-      if (dist < 0.05 || dist > wall || dist >= bestDist) continue;
+      if (dist < 0.05 || dist > wall) continue;
       const da = normAngle(Math.atan2(dy, dx) - angle);
       if (Math.abs(da) > Math.atan2(e.radius, dist)) continue;
       // 上下方向：ピッチを考慮して当たり判定する
-      const h = (this.proj * this.H * e.scale) / dist;
+      const h = (this.proj * this.bufH * e.scale) / dist;
       const vWorld = 0.5 - e.scale / 2 - (e.def.hover || 0);
-      const offsetY = this.pitch + (vWorld * this.proj * this.H) / dist;
-      if (Math.abs(offsetY) > h / 2 + this.H * 0.02) continue;
-      best = e;
-      bestDist = dist;
+      const offsetY = this.pitchBuf + (vWorld * this.proj * this.bufH) / dist;
+      if (Math.abs(offsetY) > h / 2 + this.bufH * 0.02) continue;
+      hits.push({ enemy: e, dist });
     }
-    return { enemy: best, dist: bestDist };
+    hits.sort((a, b) => a.dist - b.dist);
+    return hits.slice(0, max);
+  }
+
+  /** 照準に敵が入っているか（クロスヘアの色に使う）。 */
+  aimTarget(spread = 0) {
+    const hit = this.aimTargets(spread, 1)[0];
+    return { enemy: hit ? hit.enemy : null, dist: hit ? hit.dist : Infinity };
+  }
+
+  /** 武器XPを加算し、レベルが上がったら通知する。 */
+  addWeaponXp(amount) {
+    const p = this.player;
+    if (!p) return;
+    const before = p.weapon.level;
+    p.xp += amount;
+    const next = weaponForXp(p.xp);
+    if (next.level !== before) {
+      p.weapon = next;
+      p.ammo = Math.min(next.magazine, p.ammo + 20); // 強化時に弾も補充
+      this.sfx.weaponUp();
+      this.onEvent('weaponup', { name: next.name, level: next.level, perk: next.perk });
+    }
+  }
+
+  /** 敵を倒したときの処理（スコア・XP・ドロップ）。 */
+  killEnemy(enemy) {
+    const p = this.player;
+    enemy.dying = 0.001;
+    this.kills++;
+    p.score += enemy.def.score;
+    this.addWeaponXp(XP_BY_TYPE[enemy.type] || 1);
+    this.sfx.kill(this.panOf(enemy));
+
+    const roll = Math.random();
+    const drop = roll < 0.26 ? 'ammo' : roll < 0.38 ? 'health' : roll < 0.44 ? 'core' : null;
+    if (drop) {
+      if (this.pickups.length >= 14) this.pickups.shift(); // 拾われずに溜まり続けるのを防ぐ
+      this.pickups.push({ kind: drop, x: enemy.x, y: enemy.y, anim: 0 });
+    }
+  }
+
+  /** 音のステレオ定位（プレイヤーから見て左右どちらにいるか）。 */
+  panOf(entity) {
+    const p = this.player;
+    if (!p) return 0;
+    const da = normAngle(Math.atan2(entity.y - p.y, entity.x - p.x) - p.angle);
+    return clamp(da / (Math.PI / 2), -1, 1);
   }
 
   fire() {
     if (this.state !== 'playing') return;
     const p = this.player;
+    const w = p.weapon;
     if (p.fireCd > 0) return;
     if (p.ammo <= 0) {
       p.fireCd = 0.4;
@@ -722,31 +922,24 @@ export class Game {
       return;
     }
     p.ammo--;
-    p.fireCd = FIRE_INTERVAL;
+    p.fireCd = w.interval;
     p.recoil = 1;
-    p.flash = 0.06;
-    this.shake = Math.min(1, this.shake + 0.12);
-    this.sfx.shoot();
+    p.flash = 0.06 + w.level * 0.008;
+    this.shake = Math.min(1, this.shake + 0.1 + w.level * 0.01);
+    this.sfx.shoot(w.level);
 
-    const spread = (Math.random() - 0.5) * 0.028;
-    const { enemy } = this.aimTarget(spread);
-    if (!enemy) return;
-    enemy.hp -= BULLET_DAMAGE;
-    enemy.hurtT = 0.12;
-    enemy.awake = true;
-    if (enemy.hp <= 0) {
-      enemy.dying = 0.001;
-      this.kills++;
-      p.score += enemy.def.score;
-      this.sfx.kill();
-      const roll = Math.random();
-      const drop = roll < 0.28 ? 'ammo' : roll < 0.4 ? 'health' : null;
-      if (drop) {
-        if (this.pickups.length >= 14) this.pickups.shift(); // 拾われずに溜まり続けるのを防ぐ
-        this.pickups.push({ kind: drop, x: enemy.x, y: enemy.y, anim: 0 });
+    const pierce = 1 + (w.pierce || 0);
+    for (let i = 0; i < w.pellets; i++) {
+      // 複数弾は左右に振り分けて撃つ
+      const offset = w.pellets === 1 ? 0 : (i / (w.pellets - 1) - 0.5) * w.spread * 2;
+      const spread = offset + (Math.random() - 0.5) * w.spread;
+      for (const { enemy } of this.aimTargets(spread, pierce)) {
+        enemy.hp -= w.damage;
+        enemy.hurtT = 0.12;
+        enemy.awake = true;
+        if (enemy.hp <= 0) this.killEnemy(enemy);
+        else this.sfx.hit(this.panOf(enemy));
       }
-    } else {
-      this.sfx.hit();
     }
   }
 
@@ -756,56 +949,95 @@ export class Game {
     const p = this.player;
     if (!p || this.state !== 'playing') return;
     p.angle = normAngle(p.angle + dx);
-    this.pitch = clamp(this.pitch - dy * this.H, -this.H * 0.32, this.H * 0.32);
+    // pitch は画面高に対する割合で保持する（解像度が変わっても見た目が変わらない）
+    this.pitch = clamp(this.pitch - dy, -0.32, 0.32);
+    this.pitchBuf = this.pitch * this.bufH;
   }
 
   /* ---------------------------------- 描画 ---------------------------------- */
 
-  render(dt) {
+  render() {
     const ctx = this.ctx;
-    const W = this.W;
-    const H = this.H;
     if (!this.map || !this.player) {
       ctx.fillStyle = '#05060d';
-      ctx.fillRect(0, 0, W, H);
+      ctx.fillRect(0, 0, this.W, this.H);
       return;
     }
 
-    const shakeAmp = this.shake * this.uiScale * 9;
+    const shakeAmp = this.shake * (this.bufH / 90);
     const sx = (Math.random() - 0.5) * shakeAmp;
     const sy = (Math.random() - 0.5) * shakeAmp;
 
-    ctx.save();
-    ctx.translate(sx, sy);
-    this.renderWorld(dt);
-    ctx.restore();
-
+    // 1) 世界をオフスクリーンバッファへ描く（解像度＝時代）
+    const b = this.bctx;
+    b.save();
+    b.translate(sx, sy);
+    this.renderWorld();
+    b.restore();
     this.drawWeapon();
+
+    // 2) 時代ごとの後処理（減色・走査線）
+    this.postProcess();
+
+    // 3) 画面へ引き伸ばす
+    ctx.imageSmoothingEnabled = this.tier.smoothing;
+    ctx.drawImage(this.buf, 0, 0, this.W, this.H);
+    if (this.tier.bloom > 0) this.drawBloom();
+
+    // 4) HUD は常に高解像度で描く（読みやすさ優先）
     this.drawOverlays();
     this.drawMinimap();
     this.drawCrosshair();
   }
 
-  renderWorld(dt) {
-    const ctx = this.ctx;
-    const W = this.W;
-    const H = this.H;
+  /** 動的ライト（銃口の閃光・敵弾・強化コア）を集める。高ティアのみ使用。 */
+  collectLights() {
+    const lights = this.lights;
+    lights.length = 0;
+    if (!this.tier.lights) return lights;
     const p = this.player;
-    const horizon = Math.round(H / 2 + this.pitch);
-    const pad = 24;
+    if (p.flash > 0) lights.push({ x: p.x, y: p.y, r: 6, i: 1.5 * (p.flash / 0.09), c: [255, 220, 150] });
+    for (const b of this.projectiles) lights.push({ x: b.x, y: b.y, r: 3.4, i: 0.85, c: [196, 107, 255] });
+    for (const it of this.pickups) {
+      if (it.kind === 'core') lights.push({ x: it.x, y: it.y, r: 2.6, i: 0.5, c: [124, 232, 255] });
+    }
+    return lights;
+  }
 
-    ctx.fillStyle = this.ceilGrad;
-    ctx.fillRect(-pad, -pad, W + pad * 2, horizon + pad);
-    ctx.fillStyle = this.floorGrad;
-    ctx.fillRect(-pad, horizon, W + pad * 2, H - horizon + pad);
+  renderWorld() {
+    const ctx = this.bctx;
+    const W = this.bufW;
+    const H = this.bufH;
+    const p = this.player;
+    const horizon = Math.round(H / 2 + this.pitchBuf);
+    const pad = Math.ceil(H / 12);
 
     const dirX = Math.cos(p.angle);
     const dirY = Math.sin(p.angle);
     const planeX = -dirY * this.planeLen;
     const planeY = dirX * this.planeLen;
     const projH = this.proj * H;
-    const colW = this.colW;
+
+    // --- 床と天井 ---
+    if (this.tier.floor === 'textured') {
+      this.castFloor(horizon, dirX, dirY, planeX, planeY, projH);
+    } else if (this.tier.floor === 'gradient') {
+      ctx.fillStyle = this.ceilGrad;
+      ctx.fillRect(-pad, -pad, W + pad * 2, horizon + pad);
+      ctx.fillStyle = this.floorGrad;
+      ctx.fillRect(-pad, horizon, W + pad * 2, H - horizon + pad);
+    } else {
+      ctx.fillStyle = '#0b0e1a';
+      ctx.fillRect(-pad, -pad, W + pad * 2, horizon + pad);
+      ctx.fillStyle = '#2b3040';
+      ctx.fillRect(-pad, horizon, W + pad * 2, H - horizon + pad);
+    }
+
+    // --- 壁 ---
     const walls = this.assets.walls;
+    const colW = this.colW;
+    const lights = this.collectLights();
+    const fogSteps = Math.max(3, this.tier.shadeLevels * 2);
 
     for (let i = 0; i < this.rays; i++) {
       const cameraX = (2 * i) / this.rays - 1;
@@ -814,6 +1046,10 @@ export class Game {
       const hit = this.castRay(p.x, p.y, rdx, rdy);
       const dist = hit.dist;
       this.zbuf[i] = dist;
+      const hx = p.x + rdx * dist;
+      const hy = p.y + rdy * dist;
+      this.hitX[i] = hx;
+      this.hitY[i] = hy;
 
       const lineH = projH / dist;
       const top = horizon - lineH / 2;
@@ -826,25 +1062,137 @@ export class Game {
         texX = tex.width - texX - 1;
       }
 
-      const x = i * colW;
-      ctx.drawImage(tex, texX, 0, 1, tex.height, x, top, colW + 1, lineH);
+      const px = i * colW;
+      ctx.drawImage(tex, texX, 0, 1, tex.height, px, top, colW + 0.02, lineH);
 
+      // 距離による減光（低ティアほど段階が粗い＝バンディングが出る）
       let fog = dist / FOG_DISTANCE;
       if (hit.side === 1) fog += 0.16;
-      const q = Math.min(24, (fog * 24) | 0);
+      const q = Math.min(24, Math.round((Math.min(1, fog) * fogSteps) / fogSteps * 24));
       if (q > 0) {
         ctx.fillStyle = this._shades[q];
-        ctx.fillRect(x, top, colW + 1, lineH);
+        ctx.fillRect(px, top, colW + 0.02, lineH);
+      }
+
+      // 動的ライト（加算合成）
+      if (lights.length) {
+        let lr = 0;
+        let lg = 0;
+        let lb = 0;
+        for (const L of lights) {
+          const d2 = (L.x - hx) ** 2 + (L.y - hy) ** 2;
+          if (d2 > L.r * L.r) continue;
+          const a = L.i * (1 - Math.sqrt(d2) / L.r) ** 2;
+          lr += L.c[0] * a;
+          lg += L.c[1] * a;
+          lb += L.c[2] * a;
+        }
+        if (lr + lg + lb > 6) {
+          const scale = Math.min(1, Math.max(lr, lg, lb) / 255);
+          ctx.globalCompositeOperation = 'lighter';
+          ctx.fillStyle = `rgba(${Math.min(255, lr | 0)},${Math.min(255, lg | 0)},${Math.min(255, lb | 0)},${(scale * 0.55).toFixed(3)})`;
+          ctx.fillRect(px, top, colW + 0.02, lineH);
+          ctx.globalCompositeOperation = 'source-over';
+        }
+      }
+
+      // 接地影（壁と床の境目を締める）
+      if (this.tier.ao) {
+        const aoH = Math.max(1, lineH * 0.12);
+        ctx.fillStyle = 'rgba(4,6,14,0.35)';
+        ctx.fillRect(px, top + lineH - aoH, colW + 0.02, aoH);
       }
     }
 
     this.renderSprites(horizon, dirX, dirY, planeX, planeY, projH);
   }
 
+  /**
+   * 床をテクスチャで描く（フロアキャスティング）。高ティアのみ。
+   *
+   * 画面の読み戻し（getImageData）は重いので行わず、手前の帯だけを
+   * 専用バッファに毎フレーム書き切って putImageData する。
+   * 解像度が高いときは縦横 2px 単位で塗って計算量を抑える。
+   */
+  castFloor(horizon, dirX, dirY, planeX, planeY, projH) {
+    const ctx = this.bctx;
+    const W = this.bufW;
+    const H = this.bufH;
+
+    // 遠景はグラデーションで済ませる
+    ctx.fillStyle = this.ceilGrad;
+    ctx.fillRect(0, 0, W, Math.max(0, horizon));
+    ctx.fillStyle = this.floorGrad;
+    ctx.fillRect(0, Math.max(0, horizon), W, H - Math.max(0, horizon));
+
+    const tex = this.floorTex;
+    if (!tex) return;
+
+    const maxDist = 7.5;
+    const bandTop = Math.max(horizon + 1, Math.ceil(horizon + (0.5 * projH) / maxDist));
+    const bandH = H - bandTop;
+    if (bandH <= 0) return;
+
+    if (!this.floorBand || this.floorBand.width !== W || this.floorBand.height !== bandH) {
+      this.floorBand = ctx.createImageData(W, bandH);
+      const d = this.floorBand.data;
+      for (let i = 3; i < d.length; i += 4) d[i] = 255; // 不透明で固定
+    }
+    const out = this.floorBand.data;
+
+    const rayX0 = dirX - planeX;
+    const rayY0 = dirY - planeY;
+    const rayX1 = dirX + planeX;
+    const rayY1 = dirY + planeY;
+    const hstep = W > 620 ? 2 : 1;
+    const vstep = W > 620 ? 2 : 1;
+
+    const texData = tex.floor.data;
+    const tsize = tex.floor.size;
+    const px = this.player.x;
+    const py = this.player.y;
+
+    for (let y = 0; y < bandH; y += vstep) {
+      const screenY = bandTop + y;
+      const rowDistance = (0.5 * projH) / (screenY - horizon);
+      const stepX = (rowDistance * (rayX1 - rayX0)) / W;
+      const stepY = (rowDistance * (rayY1 - rayY0)) / W;
+      let fx = px + rowDistance * rayX0;
+      let fy = py + rowDistance * rayY0;
+
+      const light = 1 - Math.min(1, rowDistance / FOG_DISTANCE) * 0.85;
+      const rowOff = y * W * 4;
+
+      for (let x = 0; x < W; x += hstep) {
+        const tx = ((fx * tsize) | 0) & (tsize - 1);
+        const ty = ((fy * tsize) | 0) & (tsize - 1);
+        const ti = (ty * tsize + tx) * 4;
+        const r = texData[ti] * light;
+        const g = texData[ti + 1] * light;
+        const b = texData[ti + 2] * light;
+        for (let k = 0; k < hstep && x + k < W; k++) {
+          const o = rowOff + (x + k) * 4;
+          out[o] = r;
+          out[o + 1] = g;
+          out[o + 2] = b;
+        }
+        fx += stepX * hstep;
+        fy += stepY * hstep;
+      }
+
+      // 間引いた行は直前の行をコピーして埋める
+      for (let k = 1; k < vstep && y + k < bandH; k++) {
+        out.copyWithin((y + k) * W * 4, rowOff, rowOff + W * 4);
+      }
+    }
+    ctx.putImageData(this.floorBand, 0, bandTop);
+  }
+
   renderSprites(horizon, dirX, dirY, planeX, planeY, projH) {
-    const ctx = this.ctx;
+    const ctx = this.bctx;
     const p = this.player;
     const list = [];
+    const shades = this.assets.shades;
 
     for (const e of this.enemies) {
       const a = this.assets.enemies[e.type];
@@ -859,7 +1207,7 @@ export class Game {
       });
     }
     for (const it of this.pickups) {
-      const imgs = this.assets.pickups[it.kind];
+      const imgs = this.assets.pickups[it.kind] || this.assets.pickups.ammo;
       const bobY = Math.sin(it.anim * 3) * 0.05;
       list.push({
         x: it.x, y: it.y, imgs,
@@ -886,8 +1234,7 @@ export class Game {
       if (tY < 0.18) continue;
 
       const h = (projH * s.scale) / tY;
-      const w = h;
-      const wRays = w / colW;
+      const wRays = h / colW;
       const screenXRay = (this.rays / 2) * (1 + tX / tY);
       const startRay = screenXRay - wRays / 2;
       const top = horizon - h / 2 + (s.vWorld * projH) / tY;
@@ -896,7 +1243,8 @@ export class Game {
       const last = Math.min(this.rays - 1, Math.floor(startRay + wRays));
       if (last < first) continue;
 
-      const img = s.imgs[Math.min(SHADE_LEVELS - 1, (Math.sqrt(s.d2) / 2.6) | 0)];
+      const fog = Math.min(1, Math.sqrt(s.d2) / FOG_DISTANCE);
+      const img = s.imgs[Math.min(shades - 1, Math.round(fog * (shades - 1)))];
       if (s.alpha < 1) ctx.globalAlpha = s.alpha;
 
       // Z バッファで隠れていない連続区間だけをまとめて描く
@@ -919,12 +1267,11 @@ export class Game {
   }
 
   drawWeapon() {
-    const ctx = this.ctx;
+    const ctx = this.bctx;
     const p = this.player;
-    const weapon = this.assets.weapon;
-    const H = this.H;
-    const W = this.W;
-    // 画面の縦横どちらにも収まるサイズにする（縦持ちで巨大化しないように）
+    const weapon = this.assets.weapons[Math.min(this.assets.weapons.length - 1, p.weapon.level - 1)];
+    const H = this.bufH;
+    const W = this.bufW;
     const scale = Math.min(W * 0.62, H * 0.65) / weapon.width;
     const w = weapon.width * scale;
     const h = weapon.height * scale;
@@ -936,7 +1283,7 @@ export class Game {
     if (p.flash > 0) {
       const fx = x + weapon.width * 0.47 * scale;
       const fy = y + weapon.height * 0.04 * scale;
-      const r = H * 0.16;
+      const r = H * (0.16 + p.weapon.level * 0.012);
       const grad = ctx.createRadialGradient(fx, fy, 1, fx, fy, r);
       grad.addColorStop(0, 'rgba(255,244,200,0.95)');
       grad.addColorStop(0.4, 'rgba(255,180,80,0.5)');
@@ -947,6 +1294,63 @@ export class Game {
       ctx.fill();
     }
     ctx.drawImage(weapon, x, y, w, h);
+
+    if (p.flash > 0) {
+      ctx.fillStyle = `rgba(255,226,170,${p.flash * 0.32})`;
+      ctx.fillRect(0, 0, W, H);
+    }
+  }
+
+  /** 減色・走査線など「時代」を作る後処理。低ティアほど強くかかる。 */
+  postProcess() {
+    const ctx = this.bctx;
+    const W = this.bufW;
+    const H = this.bufH;
+    const tier = this.tier;
+
+    if (tier.palette || tier.colorLevels) {
+      const img = ctx.getImageData(0, 0, W, H);
+      const d = img.data;
+      if (tier.palette) {
+        const lut = this.paletteLut;
+        for (let i = 0; i < d.length; i += 4) {
+          const idx = (((d[i] >> 3) << 10) | ((d[i + 1] >> 3) << 5) | (d[i + 2] >> 3)) * 3;
+          d[i] = lut[idx];
+          d[i + 1] = lut[idx + 1];
+          d[i + 2] = lut[idx + 2];
+        }
+      } else {
+        const lut = this.levelLut;
+        for (let i = 0; i < d.length; i += 4) {
+          d[i] = lut[d[i]];
+          d[i + 1] = lut[d[i + 1]];
+          d[i + 2] = lut[d[i + 2]];
+        }
+      }
+      ctx.putImageData(img, 0, 0);
+    }
+
+    if (tier.scanline > 0) {
+      ctx.fillStyle = `rgba(0,0,0,${tier.scanline * 0.5})`;
+      for (let y = 1; y < H; y += 2) ctx.fillRect(0, y, W, 1);
+    }
+  }
+
+  /** 明るい部分をにじませる簡易ブルーム（高ティアのみ）。 */
+  drawBloom() {
+    const ctx = this.ctx;
+    const bc = this.bloomBuf.getContext('2d');
+    bc.clearRect(0, 0, this.bloomBuf.width, this.bloomBuf.height);
+    bc.filter = 'brightness(1.08) contrast(3.4) saturate(1.15)';
+    bc.drawImage(this.buf, 0, 0, this.bloomBuf.width, this.bloomBuf.height);
+    bc.filter = 'none';
+
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    ctx.globalAlpha = this.tier.bloom;
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(this.bloomBuf, 0, 0, this.W, this.H);
+    ctx.restore();
   }
 
   drawOverlays() {
@@ -955,10 +1359,6 @@ export class Game {
     const W = this.W;
     const H = this.H;
 
-    if (p.flash > 0) {
-      ctx.fillStyle = `rgba(255,226,170,${p.flash * 0.6})`;
-      ctx.fillRect(0, 0, W, H);
-    }
     const lowHp = p.hp / p.maxHp < 0.35 ? 1 - p.hp / p.maxHp / 0.35 : 0;
     const vig = Math.max(p.hurtT / 0.5, lowHp * 0.55);
     if (vig > 0.01) {
@@ -1026,7 +1426,7 @@ export class Game {
     }
 
     for (const it of this.pickups) {
-      ctx.fillStyle = it.kind === 'ammo' ? '#ffd447' : '#ff5f7a';
+      ctx.fillStyle = it.kind === 'ammo' ? '#ffd447' : it.kind === 'core' ? '#7ce8ff' : '#ff5f7a';
       ctx.fillRect(cx + (it.x - p.x) * cell - cell * 0.2, cy + (it.y - p.y) * cell - cell * 0.2, cell * 0.45, cell * 0.45);
     }
     for (const e of this.enemies) {

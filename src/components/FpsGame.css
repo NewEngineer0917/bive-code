@@ -347,3 +347,62 @@
   font-size: 12px;
   color: #ffd447;
 }
+
+/* --------------------------- 武器レベル / 描画ティア --------------------------- */
+
+.fps-chip.tier {
+  color: #7ce8ff;
+  border-color: rgba(124, 232, 255, 0.55);
+  letter-spacing: 0.12em;
+}
+
+.fps-weapon {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  background: rgba(8, 12, 24, 0.72);
+  border: 1px solid rgba(120, 220, 255, 0.3);
+  border-radius: 8px;
+  padding: 4px 10px;
+  max-width: min(260px, 46vw);
+}
+
+.fps-weapon-name {
+  font-size: clamp(10px, 2.4vw, 12px);
+  letter-spacing: 0.04em;
+  color: #cfe6ff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.fps-xpbar {
+  height: 4px;
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.fps-xpbar > i {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, #7ce8ff, #c46bff);
+  transition: width 0.2s linear;
+}
+
+.fps-ammo em {
+  font-style: normal;
+  font-size: clamp(9px, 2.2vw, 11px);
+  letter-spacing: 0.08em;
+  color: #7ce8ff;
+}
+
+.fps-banner small {
+  display: block;
+  margin-top: 6px;
+  font-size: clamp(11px, 2.6vw, 15px);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: #e6eefb;
+  text-shadow: 0 0 12px rgba(0, 0, 0, 0.8);
+}

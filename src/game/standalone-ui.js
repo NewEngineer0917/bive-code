@@ -18,6 +18,7 @@
   let usingPointerLock = false;
 
   const game = new Game(canvas, { onEvent });
+  if (window.__BZ) window.__BZ.game = game; // デバッグ・動作確認用
 
   function setPhase(next) {
     phase = next;
@@ -26,16 +27,33 @@
     el('touch').hidden = next !== 'playing' || !coarse;
   }
 
+  function showBanner(title, sub) {
+    const b = el('banner');
+    b.innerHTML = '';
+    b.appendChild(document.createTextNode(title));
+    if (sub) {
+      const small = document.createElement('small');
+      small.textContent = sub;
+      b.appendChild(small);
+    }
+    b.hidden = false;
+    b.style.animation = 'none';
+    void b.offsetWidth; // アニメーションを再生し直す
+    b.style.animation = '';
+    clearTimeout(showBanner._t);
+    showBanner._t = setTimeout(() => { b.hidden = true; }, 2200);
+  }
+
   function onEvent(type, payload) {
     if (type === 'wave') {
+      showBanner('WAVE ' + payload.wave);
+    } else if (type === 'tier') {
+      showBanner(payload.label, '映像・音響が進化：' + payload.note);
+    } else if (type === 'weaponup') {
+      showBanner('WEAPON Lv.' + payload.level, payload.name + '／' + payload.perk);
+    } else if (type === 'gameover_LEGACY') {
       const b = el('banner');
-      b.textContent = 'WAVE ' + payload.wave;
       b.hidden = false;
-      b.style.animation = 'none';
-      void b.offsetWidth; // アニメーションを再生し直す
-      b.style.animation = '';
-      clearTimeout(onEvent._t);
-      onEvent._t = setTimeout(() => { b.hidden = true; }, 1900);
     } else if (type === 'gameover') {
       if (payload.score > best) { best = payload.score; writeBest(best); el('over-note').textContent = 'ハイスコア更新！'; }
       else el('over-note').textContent = 'ハイスコア ' + best;
@@ -61,6 +79,10 @@
     el('c-enemies').textContent = '敵 ' + h.enemies;
     el('ammo').textContent = h.ammo;
     el('ammo-box').classList.toggle('empty', h.ammo === 0);
+    el('c-tier').textContent = h.tier;
+    el('w-name').textContent = h.weapon;
+    el('w-level').textContent = 'Lv.' + h.weaponLevel;
+    el('w-fill').style.width = ((h.weaponMax ? 1 : h.weaponRatio || 0) * 100) + '%';
   }, 100);
 
   /* ------------------------------- キーボード ------------------------------- */

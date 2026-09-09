@@ -109,6 +109,47 @@
   .icon-btn:hover { border-color: var(--teal); }
   .icon-btn:active { background: rgba(75, 224, 192, 0.28); }
 
+  .chip.tier { color: #7ce8ff; border-color: rgba(124, 232, 255, 0.5); letter-spacing: 0.14em; }
+
+  .weapon {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 4px 10px;
+    background: rgba(7, 10, 18, 0.72);
+    border: 1px solid var(--line);
+    max-width: min(260px, 46vw);
+  }
+  .weapon > span {
+    font-family: var(--display);
+    font-size: clamp(10px, 2.3vw, 12px);
+    letter-spacing: 0.04em;
+    color: #cfe6ff;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .xpbar { height: 4px; background: rgba(255, 255, 255, 0.12); overflow: hidden; }
+  .xpbar > i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--teal), #c46bff); transition: width 0.2s linear; }
+
+  #ammo-box em {
+    font-style: normal;
+    font-size: clamp(9px, 2vw, 11px);
+    letter-spacing: 0.1em;
+    color: #7ce8ff;
+  }
+
+  #banner small {
+    display: block;
+    margin-top: 8px;
+    font-family: var(--body);
+    font-size: clamp(11px, 2.6vw, 16px);
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    color: var(--text);
+    text-shadow: 0 2px 12px rgba(0, 0, 0, 0.85);
+  }
+
   #banner {
     position: absolute;
     top: 17%;
@@ -287,10 +328,15 @@
         <span class="chip" id="c-wave">WAVE 1</span>
         <span class="chip" id="c-score">SCORE 0</span>
         <span class="chip" id="c-enemies">敵 0</span>
+        <span class="chip tier" id="c-tier">8-BIT</span>
+      </div>
+      <div class="weapon">
+        <span id="w-name">ブラスター Mk.I</span>
+        <div class="xpbar"><i id="w-fill"></i></div>
       </div>
     </div>
 
-    <div id="ammo-box"><b id="ammo">48</b><small>AMMO</small></div>
+    <div id="ammo-box"><b id="ammo">48</b><small>AMMO</small><em id="w-level">Lv.1</em></div>
 
     <div class="tools">
       <button type="button" class="icon-btn" id="pause-btn" aria-label="ポーズ">❚❚</button>
@@ -311,7 +357,7 @@
     <div class="panel">
       <p class="eyebrow">SECTOR 07 / 掃討任務</p>
       <h1>BLASTER ZONE</h1>
-      <p class="lede">自動生成された迷宮に、ウェーブごとに数を増す敵が湧く。弾薬箱と救急箱を拾いながら、どこまで生き残れるか。</p>
+      <p class="lede">自動生成された迷宮に、ウェーブごとに数を増す敵が湧く。生き延びるほど<strong>映像は8BITのドット絵から最新の3D描画へ、音も同時に進化</strong>し、武器は Mk.VI まで強化されていく。</p>
       <button type="button" class="btn" data-difficulty="easy">かんたん ではじめる</button>
       <button type="button" class="btn primary" data-difficulty="normal">ふつう ではじめる</button>
       <button type="button" class="btn" data-difficulty="hard">むずかしい ではじめる</button>
@@ -325,6 +371,8 @@
         <dt>ポーズ</dt><dd>Esc ／ 画面右上の ❚❚</dd>
       </dl>
       <p class="specs">
+        <b>進化</b> 8-BIT → 16-BIT → VGA → SVGA → HD → ULTRA（1ウェーブごとに1段階）<br>
+        <b>武器</b> ブラスター Mk.I → アニヒレーター Mk.VI（撃破でXPが貯まる／強化コアで加速）<br>
         <b>敵</b> ドローン（高速・接近）／ ガンナー（射撃・距離を取る）／ ブルート（重装甲）<br>
         <b>描画</b> Canvas 2D のレイキャスティング。テクスチャ・スプライト・効果音はすべてコード生成
       </p>

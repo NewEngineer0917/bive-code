@@ -321,7 +321,20 @@ function orbSprite(color) {
   return c;
 }
 
-function weaponSprite() {
+/**
+ * 武器スプライト。レベルが上がるほど大きく、砲身が増え、発光部が派手になる。
+ */
+const WEAPON_STYLES = [
+  { body: '#3b4569', trim: '#5a6790', cell: '#4be0c0', barrels: 1, barrelLen: 58, cellW: 46, wing: 0 },
+  { body: '#3d4a74', trim: '#63719c', cell: '#63f0d0', barrels: 1, barrelLen: 66, cellW: 52, wing: 6 },
+  { body: '#3f4a7e', trim: '#6c7cae', cell: '#7ce8ff', barrels: 2, barrelLen: 70, cellW: 56, wing: 10 },
+  { body: '#46407e', trim: '#7a72b6', cell: '#9d8bff', barrels: 2, barrelLen: 82, cellW: 60, wing: 14 },
+  { body: '#4d3a76', trim: '#8b6fc0', cell: '#c46bff', barrels: 3, barrelLen: 88, cellW: 64, wing: 18 },
+  { body: '#5c4426', trim: '#c9973f', cell: '#ffe27a', barrels: 3, barrelLen: 96, cellW: 68, wing: 24 },
+];
+
+function weaponSprite(level) {
+  const st = WEAPON_STYLES[Math.max(0, Math.min(WEAPON_STYLES.length - 1, level - 1))];
   const c = canvasOf(340, 240);
   const g = c.getContext('2d');
 
@@ -365,11 +378,21 @@ function weaponSprite() {
   g.arc(160, 158, 22, 0.15, Math.PI * 0.85);
   g.stroke();
 
+  // side wings（レベルが上がると横に張り出す）
+  if (st.wing > 0) {
+    g.fillStyle = shade(st.body, 0.75);
+    g.fillRect(112 - st.wing, 92, st.wing + 8, 44);
+    g.fillRect(220, 88, st.wing + 8, 48);
+    g.fillStyle = st.cell;
+    g.fillRect(112 - st.wing + 3, 104, Math.max(3, st.wing - 4), 18);
+    g.fillRect(223, 100, Math.max(3, st.wing - 4), 22);
+  }
+
   // 本体（レシーバー）
   const body = g.createLinearGradient(0, 74, 0, 152);
-  body.addColorStop(0, '#5a6790');
-  body.addColorStop(0.5, '#3b4569');
-  body.addColorStop(1, '#242b44');
+  body.addColorStop(0, st.trim);
+  body.addColorStop(0.5, st.body);
+  body.addColorStop(1, shade(st.body, 0.6));
   g.fillStyle = body;
   g.beginPath();
   g.moveTo(112, 84);
@@ -385,27 +408,35 @@ function weaponSprite() {
 
   // エネルギーセル
   g.fillStyle = '#101627';
-  g.fillRect(122, 100, 54, 26);
-  g.fillStyle = '#4be0c0';
-  g.fillRect(126, 104, 46, 18);
-  g.fillStyle = '#a7fff0';
-  g.fillRect(126, 104, 16, 18);
+  g.fillRect(122, 100, st.cellW + 8, 26);
+  g.fillStyle = st.cell;
+  g.fillRect(126, 104, st.cellW, 18);
+  g.fillStyle = '#ffffff';
+  g.globalAlpha = 0.55;
+  g.fillRect(126, 104, Math.round(st.cellW * 0.3), 18);
+  g.globalAlpha = 1;
 
   // 上部レール＆サイト
-  g.fillStyle = '#2e3752';
+  g.fillStyle = shade(st.body, 0.8);
   g.fillRect(146, 62, 46, 24);
   g.fillStyle = '#151b2c';
   g.fillRect(160, 54, 16, 12);
 
-  // バレル
-  g.fillStyle = '#39425f';
-  g.fillRect(152, 10, 32, 58);
-  g.fillStyle = '#242c44';
-  g.fillRect(152, 10, 10, 58);
-  g.fillStyle = '#0f1422';
-  g.fillRect(146, 0, 44, 16);
-  g.fillStyle = '#4be0c0';
-  g.fillRect(150, 4, 36, 5);
+  // バレル（本数がレベルで増える）
+  const top = 68 - st.barrelLen;
+  const gap = st.barrels > 1 ? 36 / st.barrels : 0;
+  for (let i = 0; i < st.barrels; i++) {
+    const offset = (i - (st.barrels - 1) / 2) * (gap + 14);
+    const bx = 152 + offset;
+    g.fillStyle = shade(st.body, 0.95);
+    g.fillRect(bx, top, 30, st.barrelLen);
+    g.fillStyle = shade(st.body, 0.62);
+    g.fillRect(bx, top, 9, st.barrelLen);
+    g.fillStyle = '#0f1422';
+    g.fillRect(bx - 5, top - 10, 40, 16);
+    g.fillStyle = st.cell;
+    g.fillRect(bx - 1, top - 6, 32, 5);
+  }
 
   // ハンド（グリップを握る手）
   g.fillStyle = '#39415f';
@@ -417,61 +448,158 @@ function weaponSprite() {
   g.closePath();
   g.fill();
   g.fillStyle = '#2c3350';
-  for (let i = 0; i < 3; i++) {
-    g.fillRect(133 + i * 2, 152 + i * 14, 62, 5);
-  }
+  for (let i = 0; i < 3; i++) g.fillRect(133 + i * 2, 152 + i * 14, 62, 5);
 
   g.restore();
   return c;
 }
 
-/* --------------------------------- 明暗バリエーション --------------------------------- */
+/** 武器強化コア（拾うと武器XPが増えるアイテム）。 */
+function coreSprite() {
+  const c = canvasOf(TEX_SIZE, TEX_SIZE);
+  const g = c.getContext('2d');
+  g.fillStyle = 'rgba(0,0,0,0.3)';
+  g.beginPath();
+  g.ellipse(32, 52, 13, 4, 0, 0, TAU);
+  g.fill();
+  const grad = g.createRadialGradient(32, 32, 2, 32, 32, 18);
+  grad.addColorStop(0, '#ffffff');
+  grad.addColorStop(0.4, '#7ce8ff');
+  grad.addColorStop(1, 'rgba(60,120,255,0)');
+  g.fillStyle = grad;
+  g.beginPath();
+  g.arc(32, 32, 18, 0, TAU);
+  g.fill();
+  g.strokeStyle = '#dff6ff';
+  g.lineWidth = 3;
+  g.beginPath();
+  g.moveTo(32, 16);
+  g.lineTo(45, 32);
+  g.lineTo(32, 48);
+  g.lineTo(19, 32);
+  g.closePath();
+  g.stroke();
+  g.fillStyle = 'rgba(255,255,255,0.85)';
+  g.beginPath();
+  g.moveTo(32, 23);
+  g.lineTo(39, 32);
+  g.lineTo(32, 41);
+  g.lineTo(25, 32);
+  g.closePath();
+  g.fill();
+  return c;
+}
 
-function shadedVariants(src) {
+/* ------------------------- 解像度ティア別のアセット生成 ------------------------- */
+
+/**
+ * 画像を res × res 相当のドット絵に粗くする（出力サイズは元のまま）。
+ * 8bit / 16bit 時代の見た目を、同じ描画コードのまま再現するための処理。
+ */
+function pixelate(src, res) {
+  if (res >= src.width) return src;
+  const small = canvasOf(res, Math.round((res * src.height) / src.width));
+  const sg = small.getContext('2d');
+  sg.imageSmoothingEnabled = true;
+  sg.drawImage(src, 0, 0, small.width, small.height);
+
+  const out = canvasOf(src.width, src.height);
+  const og = out.getContext('2d');
+  og.imageSmoothingEnabled = false;
+  og.drawImage(small, 0, 0, out.width, out.height);
+  return out;
+}
+
+function shadedVariants(src, levels) {
   const out = [];
-  for (let i = 0; i < SHADE_LEVELS; i++) {
+  for (let i = 0; i < levels; i++) {
     const c = canvasOf(src.width, src.height);
     const g = c.getContext('2d');
     g.drawImage(src, 0, 0);
     g.globalCompositeOperation = 'source-atop';
-    g.fillStyle = `rgba(6,8,18,${(i / (SHADE_LEVELS - 1)) * 0.82})`;
+    g.fillStyle = `rgba(6,8,18,${(i / (levels - 1)) * 0.82})`;
     g.fillRect(0, 0, c.width, c.height);
     out.push(c);
   }
   return out;
 }
 
-function enemyAsset(draw) {
-  return {
-    frames: [shadedVariants(draw(0, false)), shadedVariants(draw(1, false))],
-    hurt: shadedVariants(draw(0, true)),
-  };
-}
+/* 解像度ティアごとの設定: アートの粗さと明暗段階数 */
+const ASSET_SETS = [
+  { texRes: 16, spriteRes: 20, shades: 4 },   // 0: ドット絵時代
+  { texRes: 32, spriteRes: 40, shades: 6 },   // 1: 中間
+  { texRes: 64, spriteRes: 64, shades: 10 },  // 2: 高精細（元データそのまま）
+];
 
-let cached = null;
+const baseCache = { walls: null, enemies: null, pickups: null, orb: null, weapons: null };
+const setCache = [];
 
-/** 全アセットを生成（初回のみ実行し、以降はキャッシュを返す）。 */
-export function buildAssets() {
-  if (cached) return cached;
-  cached = {
-    walls: [
+function baseArt() {
+  if (!baseCache.walls) {
+    baseCache.walls = [
       null,
       brickWall('#7c3b3b', '#2a1d22', 11),
       panelWall('#39456b', '#4be0c0', 23),
       rockWall('#4d5566', 37),
       hazardWall(53),
-    ],
-    enemies: {
-      drone: enemyAsset(droneSprite),
-      gunner: enemyAsset(gunnerSprite),
-      brute: enemyAsset(bruteSprite),
-    },
+    ];
+    baseCache.enemies = {
+      drone: [droneSprite(0, false), droneSprite(1, false), droneSprite(0, true)],
+      gunner: [gunnerSprite(0, false), gunnerSprite(1, false), gunnerSprite(0, true)],
+      brute: [bruteSprite(0, false), bruteSprite(1, false), bruteSprite(0, true)],
+    };
+    baseCache.pickups = { ammo: ammoSprite(), health: healthSprite(), core: coreSprite() };
+    baseCache.orb = orbSprite('#c46bff');
+    baseCache.weapons = WEAPON_STYLES.map((_, i) => weaponSprite(i + 1));
+  }
+  return baseCache;
+}
+
+/**
+ * 指定ティアのアセット一式を返す（必要になった時点で生成してキャッシュする）。
+ * setIndex: 0 = 低解像度, 1 = 中, 2 = 高
+ */
+export function getAssetSet(setIndex) {
+  const idx = Math.max(0, Math.min(ASSET_SETS.length - 1, setIndex));
+  if (setCache[idx]) return setCache[idx];
+
+  const conf = ASSET_SETS[idx];
+  const base = baseArt();
+  const sprite = (src) => shadedVariants(pixelate(src, conf.spriteRes), conf.shades);
+
+  const enemies = {};
+  for (const [type, imgs] of Object.entries(base.enemies)) {
+    enemies[type] = {
+      frames: [sprite(imgs[0]), sprite(imgs[1])],
+      hurt: sprite(imgs[2]),
+    };
+  }
+
+  setCache[idx] = {
+    walls: base.walls.map((w) => (w ? pixelate(w, conf.texRes) : null)),
+    enemies,
     pickups: {
-      ammo: shadedVariants(ammoSprite()),
-      health: shadedVariants(healthSprite()),
+      ammo: sprite(base.pickups.ammo),
+      health: sprite(base.pickups.health),
+      core: sprite(base.pickups.core),
     },
-    orb: shadedVariants(orbSprite('#c46bff')),
-    weapon: weaponSprite(),
+    orb: sprite(base.orb),
+    weapons: base.weapons.map((w) => pixelate(w, conf.spriteRes === 64 ? 340 : conf.spriteRes * 5)),
+    shades: conf.shades,
   };
-  return cached;
+  return setCache[idx];
+}
+
+/** 床のテクスチャ（フロアキャスティング用に生の画素配列で持つ）。 */
+let floorTexCache = null;
+
+export function getFloorTextures() {
+  if (floorTexCache) return floorTexCache;
+  const make = (canvas) => {
+    const g = canvas.getContext('2d');
+    const { data } = g.getImageData(0, 0, canvas.width, canvas.height);
+    return { data, size: canvas.width };
+  };
+  floorTexCache = { floor: make(rockWall('#3b4152', 71)) };
+  return floorTexCache;
 }

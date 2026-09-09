@@ -18,13 +18,21 @@ const GAME = path.join(ROOT, 'src', 'game');
 const OUT_DIR = path.join(ROOT, 'dist-standalone');
 
 const MODULES = [
-  { file: 'textures.js', exports: ['TEX_SIZE', 'SHADE_LEVELS', 'buildAssets'], imports: [] },
+  { file: 'textures.js', exports: ['TEX_SIZE', 'SHADE_LEVELS', 'getAssetSet', 'getFloorTextures'], imports: [] },
   { file: 'mapGen.js', exports: ['MAP_SIZE', 'createRng', 'generateMap'], imports: [] },
   { file: 'audio.js', exports: ['Sfx'], imports: [] },
   {
+    file: 'fidelity.js',
+    exports: ['TIERS', 'tierForWave', 'WEAPON_LEVELS', 'weaponForXp', 'weaponProgress'],
+    imports: [],
+  },
+  {
     file: 'engine.js',
     exports: ['DIFFICULTIES', 'Game'],
-    imports: ['buildAssets', 'SHADE_LEVELS', 'generateMap', 'createRng', 'Sfx'],
+    imports: [
+      'getAssetSet', 'getFloorTextures', 'generateMap', 'createRng', 'Sfx',
+      'TIERS', 'tierForWave', 'weaponForXp', 'weaponProgress',
+    ],
   },
 ];
 

@@ -38,7 +38,10 @@ export default function FpsGame() {
   const knobRef = useRef(null);
 
   const [phase, setPhaseState] = useState('menu'); // menu | playing | paused | over
-  const [hud, setHud] = useState({ hp: 100, maxHp: 100, ammo: 0, score: 0, wave: 0, enemies: 0 });
+  const [hud, setHud] = useState({
+    hp: 100, maxHp: 100, ammo: 0, score: 0, wave: 0, enemies: 0,
+    weapon: 'ブラスター Mk.I', weaponLevel: 1, weaponRatio: 0, tier: '8-BIT',
+  });
   const [result, setResult] = useState(null);
   const [banner, setBanner] = useState(null);
   const [stick, setStick] = useState(null);
@@ -63,6 +66,10 @@ export default function FpsGame() {
       onEvent: (type, payload) => {
         if (type === 'wave') {
           setBanner({ text: `WAVE ${payload.wave}`, id: Date.now() });
+        } else if (type === 'tier') {
+          setBanner({ text: payload.label, sub: `映像・音響が進化：${payload.note}`, id: Date.now() });
+        } else if (type === 'weaponup') {
+          setBanner({ text: `WEAPON Lv.${payload.level}`, sub: `${payload.name}／${payload.perk}`, id: Date.now() });
         } else if (type === 'gameover') {
           setResult(payload);
           setPhase('over');
@@ -400,12 +407,20 @@ export default function FpsGame() {
                 <span className="fps-chip">WAVE {hud.wave}</span>
                 <span className="fps-chip">SCORE {hud.score}</span>
                 <span className="fps-chip">敵 {hud.enemies}</span>
+                <span className="fps-chip tier">{hud.tier}</span>
+              </div>
+              <div className="fps-weapon">
+                <span className="fps-weapon-name">{hud.weapon}</span>
+                <div className="fps-xpbar">
+                  <i style={{ width: `${(hud.weaponMax ? 1 : hud.weaponRatio || 0) * 100}%` }} />
+                </div>
               </div>
             </div>
 
             <div className={`fps-ammo${hud.ammo === 0 ? ' empty' : ''}`}>
               <b>{hud.ammo}</b>
               <span>AMMO</span>
+              <em>Lv.{hud.weaponLevel}</em>
             </div>
 
             <div className="fps-tools">
@@ -448,7 +463,12 @@ export default function FpsGame() {
           </>
         )}
 
-        {banner && <div className="fps-banner" key={banner.id}>{banner.text}</div>}
+        {banner && (
+          <div className="fps-banner" key={banner.id}>
+            {banner.text}
+            {banner.sub && <small>{banner.sub}</small>}
+          </div>
+        )}
       </div>
 
       {phase === 'menu' && (
@@ -471,7 +491,8 @@ export default function FpsGame() {
             <div className="fps-help">
               <b>PC:</b> WASD / 矢印 = 移動、マウス = 視点、クリック or スペース = 射撃、Shift = ダッシュ、Esc = ポーズ<br />
               <b>スマホ:</b> 画面左側をドラッグ = 移動（大きく倒すとダッシュ）、右側をドラッグ = 視点、右側タップ or FIRE = 射撃<br />
-              <b>目標:</b> ウェーブごとに増える敵を全滅させる。弾薬箱と救急箱を拾って生き延びよう。
+              <b>目標:</b> ウェーブごとに増える敵を全滅させる。弾薬箱・救急箱・強化コアを拾って生き延びよう。<br />
+              <b>進化:</b> ウェーブが進むごとに映像が 8BIT のドット絵から最新の 3D 描画へ、音も同時に進化する。撃破で武器がレベルアップし Mk.VI まで強化される。
             </div>
             <Link to="/" className="fps-back">← アプリに戻る</Link>
           </div>
