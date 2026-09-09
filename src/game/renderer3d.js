@@ -12,6 +12,7 @@
 
 import { buildMaterials, MAT_SIZE, MATERIALS } from './materials';
 import { WEAPONS } from './weapons';
+import { parseGlb, base64ToArrayBuffer } from './gltf';
 import { mat4, multiply, perspective, lookAt, compose } from './glmath';
 
 const EYE_H = 1.6;    // 視点の高さ
@@ -483,6 +484,127 @@ function cylinderMesh(seg = 14) {
 }
 
 export class Renderer3D {
+  /**
+   * .glb モデルを読み込む（アセットは public/models/、単一HTML版は埋め込み）。
+   * 読み込めるまではプリミティブで代用するので、失敗してもゲームは動く。
+   */
+  async loadModels(opts = {}) {
+    const names = [
+      'enemy_gunner', 'enemy_brute', 'enemy_drone',
+      'car_sedan', 'car_taxi', 'car_van',
+      'prop_traffic_light', 'prop_trashcan', 'prop_bench', 'prop_hydrant',
+    ];
+    await Promise.all(names.map(async (name) => {
+      try {
+        let buffer;
+        if (opts.data && opts.data[name]) buffer = base64ToArrayBuffer(opts.data[name]);
+        else if (opts.baseUrl) buffer = await (await fetch(`${opts.baseUrl}${name}.glb`)).arrayBuffer();
+        else return;
+        this.models.set(name, this._uploadModel(parseGlb(buffer)));
+      } catch (e) {
+        /* 読み込めないモデルは使わない */
+      }
+    }));
+    this.modelsReady = this.models.size > 0;
+  }
+
+  /** 解析済みモデルを GPU バッファへ載せる。 */
+  _uploadModel(model) {
+    const gl = this.gl;
+    const parts = model.parts.map((part) => {
+      const vao = gl.createVertexArray();
+      gl.bindVertexArray(vao);
+      const posBuf = gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER, posBuf);
+      gl.bufferData(gl.ARRAY_BUFFER, part.positions, gl.STATIC_DRAW);
+      gl.enableVertexAttribArray(this.progObject.attribs.aPos);
+      gl.vertexAttribPointer(this.progObject.attribs.aPos, 3, gl.FLOAT, false, 0, 0);
+      if (part.normals) {
+        const nrmBuf = gl.createBuffer();
+        gl.bindBuffer(gl.ARRAY_BUFFER, nrmBuf);
+        gl.bufferData(gl.ARRAY_BUFFER, part.normals, gl.STATIC_DRAW);
+        gl.enableVertexAttribArray(this.progObject.attribs.aNormal);
+        gl.vertexAttribPointer(this.progObject.attribs.aNormal, 3, gl.FLOAT, false, 0, 0);
+      }
+      let indexBuf = null;
+      let indexType = gl.UNSIGNED_SHORT;
+      if (part.indices) {
+        indexBuf = gl.createBuffer();
+        gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indexBuf);
+        gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, part.indices, gl.STATIC_DRAW);
+        indexType = part.indices.BYTES_PER_ELEMENT === 4 ? gl.UNSIGNED_INT : gl.UNSIGNED_SHORT;
+      }
+      gl.bindVertexArray(null);
+      return {
+        name: part.name,
+        vao,
+        count: part.indices ? part.indices.length : part.positions.length / 3,
+        indexed: !!part.indices,
+        indexType,
+        translation: part.translation,
+        material: part.material,
+      };
+    });
+    return { parts };
+  }
+
+  /**
+   * モデルを配置して描く。
+   * animate(partName) が [dx, dy, dz, pitch] を返すと、そのパーツだけ動かせる
+   * （歩行やホバリングの表現に使う）。
+   */
+  drawModel(name, x, y, z, yaw, scale, animate, tint) {
+    const model = this.models.get(name);
+    if (!model) return false;
+    const cy = Math.cos(yaw);
+    const sy = Math.sin(yaw);
+    for (const part of model.parts) {
+      const extra = animate ? animate(part.name) : null;
+      const t = part.translation;
+      let lx = t[0];
+      let ly = t[1];
+      let lz = t[2];
+      if (extra) {
+        lx += extra[0] || 0;
+        ly += extra[1] || 0;
+        lz += extra[2] || 0;
+      }
+      // ヨー回転を適用してワールド位置へ
+      const wx = x + (lx * cy + lz * sy) * scale;
+      const wy = y + ly * scale;
+      const wz = z + (-lx * sy + lz * cy) * scale;
+      compose(this.model, [wx, wy, wz], yaw, extra ? extra[3] || 0 : 0, [scale, scale, scale]);
+      const m = part.material;
+      const color = tint
+        ? [m.color[0] * tint[0], m.color[1] * tint[1], m.color[2] * tint[2]]
+        : m.color;
+      this._drawMeshRaw(part, this.model, color, m.emissive, m.roughness, m.metallic);
+    }
+    return true;
+  }
+
+  _drawMeshRaw(part, model, color, emissive, rough, metal) {
+    const gl = this.gl;
+    const u = this.progObject.uniforms;
+    gl.uniformMatrix4fv(u.uModel, false, model);
+    const nm = this.normalMat;
+    const sx = 1 / (Math.hypot(model[0], model[1], model[2]) || 1);
+    const sy2 = 1 / (Math.hypot(model[4], model[5], model[6]) || 1);
+    const sz = 1 / (Math.hypot(model[8], model[9], model[10]) || 1);
+    nm[0] = model[0] * sx; nm[1] = model[1] * sx; nm[2] = model[2] * sx;
+    nm[3] = model[4] * sy2; nm[4] = model[5] * sy2; nm[5] = model[6] * sy2;
+    nm[6] = model[8] * sz; nm[7] = model[9] * sz; nm[8] = model[10] * sz;
+    gl.uniformMatrix3fv(u.uNormalMat, false, nm);
+    gl.uniform3fv(u.uColor, color);
+    gl.uniform3fv(u.uEmissive, emissive);
+    gl.uniform1f(u.uRough, rough);
+    gl.uniform1f(u.uMetal, metal);
+    gl.uniform1f(u.uAmbientBoost, this.ambientBoost || 0);
+    gl.bindVertexArray(part.vao);
+    if (part.indexed) gl.drawElements(gl.TRIANGLES, part.count, part.indexType, 0);
+    else gl.drawArrays(gl.TRIANGLES, 0, part.count);
+  }
+
   static isSupported() {
     try {
       const c = document.createElement('canvas');
@@ -524,6 +646,9 @@ export class Renderer3D {
       grain: 0.03, aberration: 1, vignette: 0.5, exposure: 1.1,
     };
     this.mapMesh = null;
+    this.models = new Map();
+    this.modelsReady = false;
+    this.cityProps = [];
     this.time = 0;
     this.width = 0;
     this.height = 0;
@@ -773,6 +898,60 @@ export class Renderer3D {
       }
     }
 
+    // --- 駐車車両・信号機・歩道の小物を配置する ---
+    this.cityProps = [];
+    const carModels = ['car_sedan', 'car_taxi', 'car_van'];
+    let propSeed = 12345;
+    const prnd = () => {
+      propSeed = (propSeed * 1103515245 + 12345) >>> 0;
+      return propSeed / 4294967296;
+    };
+    for (let y = 2; y < size - 2; y++) {
+      for (let x = 2; x < size - 2; x++) {
+        if (tiles[y * size + x]) continue;
+        const k = kindAt(x, y);
+
+        // 車道の端（歩道に接する車線）に車を停める
+        if (k === 0) {
+          const nextToSidewalk = [[1, 0], [-1, 0], [0, 1], [0, -1]]
+            .find(([dx, dy]) => !tiles[(y + dy) * size + (x + dx)] && kindAt(x + dx, y + dy) === 1);
+          if (nextToSidewalk && (x * 5 + y * 11) % 17 === 0 && prnd() < 0.75) {
+            const alongZ = nextToSidewalk[0] !== 0; // 歩道が左右にあるなら車は南北向き
+            this.cityProps.push({
+              model: carModels[(prnd() * carModels.length) | 0],
+              x: x + 0.5 + nextToSidewalk[0] * 0.12,
+              y: 0,
+              z: y + 0.5 + nextToSidewalk[1] * 0.12,
+              yaw: alongZ ? 0 : Math.PI / 2,
+              scale: 1,
+            });
+          }
+          continue;
+        }
+
+        if (k !== 1) continue;
+        // 交差点の角には信号機
+        const cornerRoads = [[1, 0], [-1, 0], [0, 1], [0, -1]]
+          .filter(([dx, dy]) => !tiles[(y + dy) * size + (x + dx)] && kindAt(x + dx, y + dy) === 0).length;
+        if (cornerRoads >= 2 && (x + y) % 3 === 0) {
+          this.cityProps.push({
+            model: 'prop_traffic_light', x: x + 0.5, y: CURB, z: y + 0.5,
+            yaw: prnd() * Math.PI * 2, scale: 0.85,
+          });
+          continue;
+        }
+        // 歩道の小物
+        if ((x * 3 + y * 7) % 11 === 0) {
+          const r = prnd();
+          const model = r < 0.4 ? 'prop_trashcan' : r < 0.75 ? 'prop_hydrant' : 'prop_bench';
+          this.cityProps.push({
+            model, x: x + 0.5 + (prnd() - 0.5) * 0.3, y: CURB, z: y + 0.5 + (prnd() - 0.5) * 0.3,
+            yaw: prnd() * Math.PI * 2, scale: 0.9,
+          });
+        }
+      }
+    }
+
     const vao = gl.createVertexArray();
     gl.bindVertexArray(vao);
     const bind = (name, data, comps) => {
@@ -1016,6 +1195,7 @@ export class Renderer3D {
     gl.uniformMatrix4fv(this.progObject.uniforms.uViewProj, false, this.viewProj);
     this._setLightUniforms(this.progObject, game, camPos, camDir);
     this._drawLamps(camPos);
+    this._drawProps(camPos);
     this._drawEntities(game);
 
     // 手に持った武器は世界とは別レイヤー扱いにして、壁にめり込ませない
@@ -1039,9 +1219,55 @@ export class Renderer3D {
     }
   }
 
+  /** 近くの街の小物（車・信号機など）を描く。 */
+  _drawProps(camPos) {
+    if (!this.cityProps || !this.modelsReady) return;
+    for (const prop of this.cityProps) {
+      const d2 = (prop.x - camPos[0]) ** 2 + (prop.z - camPos[2]) ** 2;
+      if (d2 > 1600) continue;   // 40 ユニット以内だけ描く
+      this.drawModel(prop.model, prop.x, prop.y, prop.z, prop.yaw, prop.scale);
+    }
+  }
+
+  /** 敵をモデルで描く。歩行に合わせて脚と腕を振る。 */
+  _drawEnemyModel(e, game, dying) {
+    const facing = Math.atan2(game.player.y - e.y, game.player.x - e.x);
+    const yaw = yawFor(facing);
+    const t = e.anim;
+    const fall = e.dying ? e.dying * 1.4 : 0;
+    const hurt = e.hurtT > 0 ? [2.2, 1.2, 1.2] : null;
+    const moving = e.awake && !e.dying;
+
+    if (e.type === 'drone') {
+      const hover = 1.15 + Math.sin(t * 2.4) * 0.08 - fall;
+      return this.drawModel('enemy_drone', e.x, hover, e.y, yaw + t * 0.6, 0.62 * dying,
+        (part) => (part === 'ring' ? [0, Math.sin(t * 6) * 0.02, 0, 0] : null), hurt);
+    }
+
+    const swing = moving ? Math.sin(t * 7) * 0.5 : 0;
+    const bob = moving ? Math.abs(Math.sin(t * 7)) * 0.03 : 0;
+    const animate = (part) => {
+      if (part === 'leg_l') return [0, 0, 0, swing];
+      if (part === 'leg_r') return [0, 0, 0, -swing];
+      if (part === 'arm_l') return [0, 0, 0, -swing * 0.6];
+      if (part === 'arm_r') return [0, 0, 0, swing * 0.4];
+      if (part === 'torso' || part === 'head' || part === 'visor') return [0, bob, 0, 0];
+      return null;
+    };
+    const name = e.type === 'brute' ? 'enemy_brute' : 'enemy_gunner';
+    const scale = (e.type === 'brute' ? 0.95 : 1) * dying;
+    return this.drawModel(name, e.x, -fall, e.y, yaw, scale, animate, hurt);
+  }
+
   _drawEntities(game) {
     const m = this.model;
     for (const e of game.enemies) {
+      const dyingScale = e.dying ? Math.max(0.2, 1 - e.dying * 1.6) : 1;
+      if (e.dying && dyingScale <= 0.22) continue;
+      if (this.modelsReady && this._drawEnemyModel(e, game, dyingScale)) continue;
+    }
+    for (const e of game.enemies) {
+      if (this.modelsReady && this.models.has(e.type === 'drone' ? 'enemy_drone' : (e.type === 'brute' ? 'enemy_brute' : 'enemy_gunner'))) continue;
       const t = e.anim;
       const dying = e.dying ? Math.max(0, 1 - e.dying * 2.2) : 1;
       if (dying <= 0.02) continue;

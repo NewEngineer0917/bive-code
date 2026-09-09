@@ -17,7 +17,12 @@
   let best = readBest();
   let usingPointerLock = false;
 
-  const game = new Game(canvas, { onEvent, glCanvas: el('gl') });
+  const game = new Game(canvas, {
+    onEvent,
+    glCanvas: el('gl'),
+    audio: { data: window.__BZ_AUDIO },     // ビルド時に埋め込まれた効果音
+    models: { data: window.__BZ_MODELS },   // 同・3Dモデル
+  });
   if (window.__BZ) window.__BZ.game = game; // デバッグ・動作確認用
 
   function setPhase(next) {

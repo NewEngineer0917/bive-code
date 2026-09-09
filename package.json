@@ -20,7 +20,9 @@
     "test": "react-scripts test",
     "eject": "react-scripts eject",
     "tailwind-init": "node node_modules/tailwindcss/dist/lib.js init -p",
-    "build:standalone": "node scripts/build-standalone.js"
+    "build:standalone": "node scripts/build-standalone.js",
+    "make:audio": "node scripts/make-audio.js",
+    "make:models": "node scripts/make-models.js"
   },
   "eslintConfig": {
     "extends": [

@@ -31,6 +31,7 @@ const MODULES = [
     imports: [],
   },
   { file: 'materials.js', exports: ['MAT_SIZE', 'MATERIALS', 'buildMaterials'], imports: [] },
+  { file: 'gltf.js', exports: ['parseGlb', 'base64ToArrayBuffer'], imports: [] },
   {
     file: 'glmath.js',
     exports: ['mat4', 'identity', 'multiply', 'perspective', 'lookAt', 'compose'],
@@ -40,7 +41,7 @@ const MODULES = [
     file: 'renderer3d.js',
     exports: ['Renderer3D'],
     imports: [
-      'buildMaterials', 'MAT_SIZE', 'MATERIALS', 'WEAPONS',
+      'buildMaterials', 'MAT_SIZE', 'MATERIALS', 'WEAPONS', 'parseGlb', 'base64ToArrayBuffer',
       'mat4', 'multiply', 'perspective', 'lookAt', 'compose',
     ],
   },
@@ -81,6 +82,23 @@ const wrap = (m) => {
 };
 
 const engine = MODULES.map(wrap).join('\n\n');
+
+// アセット（効果音・3Dモデル）を base64 で埋め込む（単一ファイルで完結させるため）
+const embedDir = (dir, ext) => {
+  const full = path.join(ROOT, 'public', dir);
+  if (!fs.existsSync(full)) return { json: '{}', count: 0 };
+  const files = fs.readdirSync(full).filter((f) => f.endsWith(ext));
+  const map = {};
+  for (const file of files) {
+    map[path.basename(file, ext)] = fs.readFileSync(path.join(full, file)).toString('base64');
+  }
+  return { json: JSON.stringify(map), count: files.length };
+};
+const modelAssets = embedDir('models', '.glb');
+
+const audioAssets = embedDir('audio', '.wav');
+const audioData = audioAssets.json;
+console.log(`効果音 ${audioAssets.count} 個 / 3Dモデル ${modelAssets.count} 個を埋め込みます`);
 const ui = fs.readFileSync(path.join(GAME, 'standalone-ui.js'), 'utf8').trim();
 const shell = fs.readFileSync(path.join(__dirname, 'standalone-shell.html'), 'utf8');
 
@@ -100,6 +118,8 @@ ${shell.trim().replace('<div id="game">', '</head>\n<body>\n<div id="game">')}
    src/game/{textures,mapGen,audio,engine}.js を連結したもの
    ========================================================================= */
 window.__BZ = {};
+window.__BZ_AUDIO = ${audioData};
+window.__BZ_MODELS = ${modelAssets.json};
 ${engine}
 </script>
 <script>

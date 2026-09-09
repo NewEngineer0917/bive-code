@@ -107,14 +107,15 @@ function normAngle(a) {
 }
 
 export class Game {
-  constructor(canvas, { onEvent, glCanvas } = {}) {
+  constructor(canvas, { onEvent, glCanvas, audio, models } = {}) {
     this.canvas = canvas;
     // 3D モードでは HUD だけをこのキャンバスに描くので透過が必要
     this.ctx = canvas.getContext('2d', { alpha: true });
     this.glCanvas = glCanvas || null;
     this.gl3d = null;
     this.mode3d = false;
-    this.sfx = new Sfx();
+    this.sfx = new Sfx(audio);
+    this.modelOpts = models || null;
     this.onEvent = onEvent || (() => {});
 
     this.input = { forward: 0, strafe: 0, turn: 0, sprint: false, firing: false };
@@ -240,6 +241,12 @@ export class Game {
     if (want3d && !this.gl3d) {
       try {
         this.gl3d = new Renderer3D(this.glCanvas);
+        // 3D モデルアセット（.glb）を読み込む。完了前でも描画は始められる
+        if (this.modelOpts) {
+          this.gl3d.loadModels(this.modelOpts).then(() => {
+            if (this.map && this.gl3d) this.gl3d.buildMap(this.map);
+          });
+        }
         if (this.map) this.gl3d.buildMap(this.map);
       } catch (e) {
         this.gl3d = null;
@@ -360,6 +367,7 @@ export class Game {
 
     this.state = 'playing';
     this.sfx.resume();
+    this.sfx.startAmbience();
     this.startWave();
     this.emitState();
   }
@@ -772,7 +780,15 @@ export class Game {
     const dy = (dirY * f + dirX * s) * speed;
     if (dx || dy) {
       this.tryMove(p, dx, dy, PLAYER_RADIUS);
-      this.bob += Math.hypot(dx, dy) * 7.5;
+      const moved = Math.hypot(dx, dy);
+      this.bob += moved * 7.5;
+      // 一定距離ごとに足音を鳴らす
+      this.stepDist = (this.stepDist || 0) + moved;
+      const stride = this.input.sprint ? 1.5 : 1.9;
+      if (this.stepDist > stride) {
+        this.stepDist = 0;
+        this.sfx.step();
+      }
     } else {
       this.bob += dt * 1.2;
     }
@@ -902,7 +918,7 @@ export class Game {
       damage,
       life: 4,
     });
-    this.sfx.enemyShot();
+    this.sfx.enemyShot(this.panOf(e), d);
   }
 
   updateProjectiles(dt) {
@@ -969,6 +985,7 @@ export class Game {
       this.state = 'over';
       this.input.firing = false;
       this.sfx.gameOver();
+      this.sfx.stopAmbience();
       this.onEvent('gameover', { score: p.score, wave: this.wave, kills: this.kills });
     }
   }
@@ -1120,7 +1137,7 @@ export class Game {
     this.kills++;
     p.score += enemy.def.score;
     this.addWeaponXp(XP_BY_TYPE[enemy.type] || 1); // 使っていた武器が成長する
-    this.sfx.kill(this.panOf(enemy));
+    this.sfx.kill(this.panOf(enemy), Math.hypot(enemy.x - p.x, enemy.y - p.y));
 
     const roll = Math.random();
     const drop = roll < 0.26 ? 'ammo' : roll < 0.38 ? 'health' : roll < 0.44 ? 'core' : null;
@@ -1181,7 +1198,7 @@ export class Game {
         enemy.hurtT = 0.12;
         enemy.awake = true;
         if (enemy.hp <= 0) this.killEnemy(enemy);
-        else this.sfx.hit(this.panOf(enemy));
+        else this.sfx.hit(this.panOf(enemy), Math.hypot(enemy.x - p.x, enemy.y - p.y));
       }
     }
 

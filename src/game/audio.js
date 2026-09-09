@@ -1,32 +1,58 @@
 /**
- * WebAudio で効果音を合成する（音声ファイル不要）。
+ * サウンドエンジン。
  *
- * 描画と同じく「時代」が進むほど音もリッチになる:
- *   8bit  … 矩形波のみ・ビットクラッシュあり・モノラル
- *   中盤  … フィルタとステレオ定位、軽いリバーブ
- *   最新  … 波形の重ね合わせ、サブベース、深いリバーブ
- *
- * 端末によっては AudioContext が使えないので、その場合は黙って無効化する。
+ * 効果音は `scripts/make-audio.js` が生成した WAV アセット（public/audio/）を
+ * 読み込んで再生する。実行時は再生と空間表現だけを行う:
+ *   ・音源の左右定位（プレイヤーから見た方向）
+ *   ・距離による減衰と、遠い音のこもり（ローパス）
+ *   ・ピッチと音量のランダム化（同じ音の連続でも単調にならない）
+ *   ・街の環境音をループ再生
  */
 
-const DEFAULT_TIER = { crush: 5, reverb: 0, pan: false, layers: 1, sub: 0, filter: false };
+/** 読み込む音の一覧（ファイル名と用途）。 */
+export const SOUND_NAMES = [
+  'shot_blaster_a', 'shot_blaster_b', 'shot_scatter_a', 'shot_scatter_b',
+  'shot_smg_a', 'shot_smg_b', 'shot_rail',
+  'reload_out', 'reload_in', 'weapon_switch', 'empty_click',
+  'hit_body', 'hit_shield', 'enemy_die', 'player_hurt', 'enemy_shot',
+  'pickup', 'weapon_up', 'wave_start', 'game_over',
+  'step_0', 'step_1', 'step_2', 'ambience',
+];
+
+const SHOT_VARIANTS = {
+  blaster: ['shot_blaster_a', 'shot_blaster_b'],
+  scatter: ['shot_scatter_a', 'shot_scatter_b'],
+  smg: ['shot_smg_a', 'shot_smg_b'],
+  rail: ['shot_rail'],
+};
+
+function base64ToBuffer(b64) {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return bytes.buffer;
+}
 
 export class Sfx {
-  constructor() {
+  /**
+   * @param {object} opts
+   *   opts.data … { 名前: base64 } 形式で埋め込まれた音源（単一HTML版）
+   *   opts.baseUrl … 音源ファイルの置き場所（React 版）
+   */
+  constructor(opts = {}) {
+    this.data = opts.data || null;
+    this.baseUrl = opts.baseUrl || null;
     this.ctx = null;
     this.master = null;
-    this.chainIn = null;
-    this.dry = null;
-    this.wet = null;
-    this.convolver = null;
-    this.crusher = null;
+    this.buffers = new Map();
     this.muted = false;
     this.failed = false;
-    this.noiseBuffer = null;
-    this.tier = DEFAULT_TIER;
+    this.loading = false;
+    this.ambienceNode = null;
+    this.wantAmbience = false;
   }
 
-  /** ユーザー操作のタイミングで呼ぶ。AudioContext の生成・再開を行う。 */
+  /** ユーザー操作のタイミングで呼ぶ。AudioContext の生成と音源の読み込みを行う。 */
   resume() {
     if (this.failed) return null;
     try {
@@ -37,7 +63,10 @@ export class Sfx {
           return null;
         }
         this.ctx = new AC();
-        this._buildChain();
+        this.master = this.ctx.createGain();
+        this.master.gain.value = this.muted ? 0 : 0.9;
+        this.master.connect(this.ctx.destination);
+        this._load();
       }
       if (this.ctx.state === 'suspended') this.ctx.resume();
       return this.ctx;
@@ -47,256 +76,164 @@ export class Sfx {
     }
   }
 
-  _buildChain() {
-    const ctx = this.ctx;
-    this.master = ctx.createGain();
-    this.master.gain.value = this.muted ? 0 : 0.35;
-    this.master.connect(ctx.destination);
+  async _load() {
+    if (this.loading) return;
+    this.loading = true;
+    const decode = (arrayBuffer) => new Promise((resolve, reject) => {
+      // Safari 互換のためコールバック形式も受けられるようにする
+      const p = this.ctx.decodeAudioData(arrayBuffer, resolve, reject);
+      if (p && p.then) p.then(resolve, reject);
+    });
 
-    // 入力 → ビットクラッシャー → ドライ/ウェット（リバーブ）→ マスター
-    this.chainIn = ctx.createGain();
-    this.crusher = ctx.createWaveShaper();
-    this.dry = ctx.createGain();
-    this.wet = ctx.createGain();
-    this.convolver = ctx.createConvolver();
-    this.convolver.buffer = this._impulse(1.6, 2.4);
-
-    this.chainIn.connect(this.crusher);
-    this.crusher.connect(this.dry);
-    this.dry.connect(this.master);
-    this.crusher.connect(this.convolver);
-    this.convolver.connect(this.wet);
-    this.wet.connect(this.master);
-
-    this._applyTier();
-  }
-
-  /** ノイズから残響のインパルス応答を作る。 */
-  _impulse(seconds, decay) {
-    const ctx = this.ctx;
-    const len = Math.max(1, Math.floor(ctx.sampleRate * seconds));
-    const buf = ctx.createBuffer(2, len, ctx.sampleRate);
-    for (let ch = 0; ch < 2; ch++) {
-      const data = buf.getChannelData(ch);
-      for (let i = 0; i < len; i++) {
-        data[i] = (Math.random() * 2 - 1) * (1 - i / len) ** decay;
+    await Promise.all(SOUND_NAMES.map(async (name) => {
+      try {
+        let arrayBuffer;
+        if (this.data && this.data[name]) {
+          arrayBuffer = base64ToBuffer(this.data[name]);
+        } else if (this.baseUrl) {
+          const res = await fetch(`${this.baseUrl}${name}.wav`);
+          arrayBuffer = await res.arrayBuffer();
+        } else {
+          return;
+        }
+        this.buffers.set(name, await decode(arrayBuffer));
+      } catch (e) {
+        /* 読み込めない音は鳴らさないだけにする */
       }
-    }
-    return buf;
-  }
-
-  /** 段階的にビット数を落とすカーブ（8bit機の粗い音を再現する）。 */
-  _crushCurve(bits) {
-    const steps = 2 ** bits;
-    const curve = new Float32Array(1024);
-    for (let i = 0; i < curve.length; i++) {
-      const x = (i / (curve.length - 1)) * 2 - 1;
-      curve[i] = Math.round(x * steps) / steps;
-    }
-    return curve;
-  }
-
-  _applyTier() {
-    if (!this.ctx) return;
-    const t = this.tier;
-    this.crusher.curve = t.crush ? this._crushCurve(t.crush) : null;
-    this.wet.gain.value = t.reverb;
-    this.dry.gain.value = 1 - t.reverb * 0.35;
-  }
-
-  /** 描画ティアに合わせて音の質感を切り替える。 */
-  setTier(audioTier) {
-    this.tier = { ...DEFAULT_TIER, ...(audioTier || {}) };
-    this._applyTier();
+    }));
+    // 読み込み完了後に、待たせていた環境音を鳴らし始める
+    if (this.wantAmbience) this.startAmbience();
+    this.onReady && this.onReady();
   }
 
   setMuted(muted) {
     this.muted = muted;
-    if (this.master) this.master.gain.value = muted ? 0 : 0.35;
+    if (this.master) this.master.gain.value = muted ? 0 : 0.9;
   }
 
-  _noise() {
-    if (!this.noiseBuffer) {
-      const len = this.ctx.sampleRate * 0.5;
-      const buf = this.ctx.createBuffer(1, len, this.ctx.sampleRate);
-      const data = buf.getChannelData(0);
-      for (let i = 0; i < len; i++) data[i] = Math.random() * 2 - 1;
-      this.noiseBuffer = buf;
-    }
-    return this.noiseBuffer;
-  }
+  /** 互換用（旧 API）。音の質感はアセット側で作り込んでいるので何もしない。 */
+  setTier() {}
 
-  /** 音源の出力先（ティアに応じてステレオ定位を挟む）。pan: -1〜1 */
-  _out(pan) {
-    const ctx = this.ctx;
-    if (!this.tier.pan || !ctx.createStereoPanner || !pan) return this.chainIn;
-    const p = ctx.createStereoPanner();
-    p.pan.value = Math.max(-1, Math.min(1, pan));
-    p.connect(this.chainIn);
-    return p;
-  }
-
-  tone({ freq = 440, to = freq, dur = 0.15, type = 'square', gain = 0.4, delay = 0, pan = 0 }) {
+  /**
+   * 音を鳴らす。
+   * pan: -1〜1（左右）、dist: プレイヤーからの距離、rate: 再生速度
+   */
+  play(name, opts = {}) {
     const ctx = this.resume();
-    if (!ctx || this.muted) return;
-    const t = ctx.currentTime + delay;
-    const osc = ctx.createOscillator();
-    const g = ctx.createGain();
-    osc.type = this.tier.layers > 1 ? type : (type === 'sine' ? 'square' : type);
-    osc.frequency.setValueAtTime(freq, t);
-    osc.frequency.exponentialRampToValueAtTime(Math.max(20, to), t + dur);
-    g.gain.setValueAtTime(0.0001, t);
-    g.gain.exponentialRampToValueAtTime(gain, t + 0.008);
-    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-    osc.connect(g).connect(this._out(pan));
-    osc.start(t);
-    osc.stop(t + dur + 0.02);
-  }
+    if (!ctx || this.muted) return null;
+    const buffer = this.buffers.get(name);
+    if (!buffer) return null;
 
-  burst({ dur = 0.2, gain = 0.35, freq = 1200, q = 1, delay = 0, pan = 0 }) {
-    const ctx = this.resume();
-    if (!ctx || this.muted) return;
-    const t = ctx.currentTime + delay;
     const src = ctx.createBufferSource();
-    src.buffer = this._noise();
-    const g = ctx.createGain();
-    g.gain.setValueAtTime(gain, t);
-    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    src.buffer = buffer;
+    const variance = opts.variance === undefined ? 0.06 : opts.variance;
+    src.playbackRate.value = (opts.rate || 1) * (1 + (Math.random() * 2 - 1) * variance);
+    if (opts.loop) src.loop = true;
+
+    const gain = ctx.createGain();
+    const dist = opts.dist || 0;
+    const attenuation = 1 / (1 + dist * dist * 0.035);
+    gain.gain.value = (opts.gain === undefined ? 1 : opts.gain) * attenuation
+      * (1 + (Math.random() * 2 - 1) * 0.08);
 
     let node = src;
-    if (this.tier.filter) {
-      const filter = ctx.createBiquadFilter();
-      filter.type = 'bandpass';
-      filter.frequency.setValueAtTime(freq, t);
-      filter.frequency.exponentialRampToValueAtTime(Math.max(120, freq * 0.35), t + dur);
-      filter.Q.value = q;
-      src.connect(filter);
-      node = filter;
+    // 遠い音はこもらせる（空気による高域の減衰）
+    if (dist > 3) {
+      const lp = ctx.createBiquadFilter();
+      lp.type = 'lowpass';
+      lp.frequency.value = Math.max(700, 14000 - dist * 700);
+      node.connect(lp);
+      node = lp;
     }
-    node.connect(g).connect(this._out(pan));
-    src.start(t);
-    src.stop(t + dur + 0.02);
+    node.connect(gain);
+
+    if (opts.pan && ctx.createStereoPanner) {
+      const panner = ctx.createStereoPanner();
+      panner.pan.value = Math.max(-1, Math.min(1, opts.pan));
+      gain.connect(panner).connect(this.master);
+    } else {
+      gain.connect(this.master);
+    }
+
+    src.start(ctx.currentTime + (opts.delay || 0));
+    return src;
   }
 
-  /** 低音の芯（高ティアのみ）。 */
-  _sub(freq, dur, gain) {
-    if (!this.tier.sub) return;
-    this.tone({ freq, to: freq * 0.4, dur, type: 'sine', gain: gain * this.tier.sub });
-  }
+  /* ------------------------------ ゲーム内の音 ------------------------------ */
 
-  /* --------------------------------- 効果音 --------------------------------- */
-
-  /** 武器ごとに音色を変える。level が上がるほど厚みが増す。 */
   shoot(level = 1, id = 'blaster') {
-    const t = this.tier;
-    const thick = t.layers >= 2;
-
-    if (id === 'scatter') {
-      this.burst({ dur: 0.22, gain: 0.32, freq: 1500, q: 0.6 });
-      this.tone({ freq: 260, to: 60, dur: 0.26, type: 'sawtooth', gain: 0.24 });
-      if (thick) this.burst({ dur: 0.5, gain: 0.12, freq: 400, q: 0.5, delay: 0.03 });
-      this._sub(58, 0.35, 0.55);
-      return;
-    }
-    if (id === 'smg') {
-      this.tone({ freq: 1150 + level * 30, to: 320, dur: 0.055, type: 'square', gain: 0.16 });
-      this.burst({ dur: 0.05, gain: 0.12, freq: 3200 });
-      this._sub(120, 0.08, 0.2);
-      return;
-    }
-    if (id === 'rail') {
-      this.tone({ freq: 220, to: 2200, dur: 0.12, type: 'sawtooth', gain: 0.2 });
-      this.tone({ freq: 2400, to: 180, dur: 0.42, type: 'sine', gain: 0.22, delay: 0.1 });
-      this.burst({ dur: 0.45, gain: 0.14, freq: 900, q: 0.8, delay: 0.08 });
-      this._sub(45, 0.6, 0.8);
-      return;
-    }
-
-    const base = 900 + level * 60;
-    this.tone({ freq: base, to: 160, dur: 0.1, type: 'square', gain: 0.2 });
-    this.burst({ dur: 0.09, gain: 0.16, freq: 2400 });
-    if (thick) this.tone({ freq: base * 0.5, to: 120, dur: 0.16, type: 'sawtooth', gain: 0.12 });
-    if (t.layers >= 3) this.burst({ dur: 0.28, gain: 0.08, freq: 700, q: 0.7, delay: 0.02 });
-    this._sub(110, 0.18, 0.3);
-  }
-
-  /** 弾倉を抜く音（リロード開始）。 */
-  reloadStart() {
-    this.burst({ dur: 0.06, gain: 0.16, freq: 1800, q: 3 });
-    this.tone({ freq: 300, to: 180, dur: 0.08, type: 'square', gain: 0.1, delay: 0.02 });
-  }
-
-  /** 弾倉を叩き込む音（リロード完了）。 */
-  reloadEnd() {
-    this.burst({ dur: 0.09, gain: 0.22, freq: 900, q: 2.5 });
-    this.tone({ freq: 200, to: 120, dur: 0.12, type: 'square', gain: 0.14, delay: 0.02 });
-    this._sub(80, 0.16, 0.3);
-  }
-
-  /** 武器の持ち替え。 */
-  weaponSwitch() {
-    this.burst({ dur: 0.05, gain: 0.12, freq: 2600, q: 2 });
-    this.tone({ freq: 520, to: 760, dur: 0.1, type: 'triangle', gain: 0.12, delay: 0.04 });
+    const list = SHOT_VARIANTS[id] || SHOT_VARIANTS.blaster;
+    const name = list[(Math.random() * list.length) | 0];
+    // レベルが上がるほど少し低く・太く鳴らす
+    this.play(name, { gain: 0.95, rate: 1.06 - level * 0.015, variance: 0.05 });
   }
 
   empty() {
-    this.tone({ freq: 220, to: 140, dur: 0.06, type: 'triangle', gain: 0.15 });
+    this.play('empty_click', { gain: 0.7 });
   }
 
-  hit(pan = 0) {
-    this.burst({ dur: 0.08, gain: 0.2, freq: 900, q: 2, pan });
-    if (this.tier.layers >= 2) this.tone({ freq: 520, to: 300, dur: 0.07, type: 'triangle', gain: 0.1, pan });
+  hit(pan = 0, dist = 0) {
+    this.play('hit_shield', { gain: 0.55, pan, dist, rate: 1.05 });
   }
 
-  kill(pan = 0) {
-    this.tone({ freq: 320, to: 60, dur: 0.4, type: 'sawtooth', gain: 0.24, pan });
-    this.burst({ dur: 0.35, gain: 0.2, freq: 500, pan });
-    if (this.tier.layers >= 2) this.burst({ dur: 0.6, gain: 0.1, freq: 220, q: 0.6, delay: 0.04, pan });
-    this._sub(70, 0.5, 0.45);
+  kill(pan = 0, dist = 0) {
+    this.play('enemy_die', { gain: 0.9, pan, dist });
   }
 
   hurt() {
-    this.tone({ freq: 180, to: 70, dur: 0.28, type: 'sawtooth', gain: 0.3 });
-    if (this.tier.layers >= 2) this.burst({ dur: 0.3, gain: 0.12, freq: 300, q: 0.8 });
-    this._sub(55, 0.4, 0.4);
+    this.play('player_hurt', { gain: 0.9 });
   }
 
-  enemyShot(pan = 0) {
-    this.tone({ freq: 420, to: 900, dur: 0.16, type: 'sine', gain: 0.13, pan });
+  enemyShot(pan = 0, dist = 0) {
+    this.play('enemy_shot', { gain: 0.6, pan, dist });
   }
 
   pickup() {
-    this.tone({ freq: 620, to: 1180, dur: 0.14, type: 'triangle', gain: 0.22 });
-    if (this.tier.layers >= 2) this.tone({ freq: 1240, to: 1860, dur: 0.12, type: 'sine', gain: 0.1, delay: 0.06 });
+    this.play('pickup', { gain: 0.7 });
   }
 
   wave() {
-    this.tone({ freq: 400, to: 400, dur: 0.18, type: 'square', gain: 0.18 });
-    this.tone({ freq: 600, to: 600, dur: 0.22, type: 'square', gain: 0.18, delay: 0.16 });
-    this.tone({ freq: 800, to: 800, dur: 0.3, type: 'square', gain: 0.2, delay: 0.34 });
+    this.play('wave_start', { gain: 0.8 });
   }
 
-  /** 武器レベルアップ音（上昇アルペジオ） */
   weaponUp() {
-    const notes = [523, 659, 784, 1046];
-    notes.forEach((f, i) => {
-      this.tone({ freq: f, to: f, dur: 0.22, type: 'triangle', gain: 0.2, delay: i * 0.09 });
-      if (this.tier.layers >= 2) {
-        this.tone({ freq: f * 2, to: f * 2, dur: 0.16, type: 'sine', gain: 0.09, delay: i * 0.09 + 0.02 });
-      }
-    });
-    this._sub(90, 0.5, 0.4);
+    this.play('weapon_up', { gain: 0.8 });
   }
 
-  /** 描画ティアが上がったときのファンファーレ */
-  tierUp() {
-    this.tone({ freq: 300, to: 900, dur: 0.5, type: 'sawtooth', gain: 0.16 });
-    this.tone({ freq: 900, to: 1400, dur: 0.4, type: 'sine', gain: 0.12, delay: 0.2 });
-    this._sub(60, 0.7, 0.5);
+  reloadStart() {
+    this.play('reload_out', { gain: 0.75 });
+  }
+
+  reloadEnd() {
+    this.play('reload_in', { gain: 0.8 });
+  }
+
+  weaponSwitch() {
+    this.play('weapon_switch', { gain: 0.6 });
   }
 
   gameOver() {
-    this.tone({ freq: 400, to: 60, dur: 1.1, type: 'sawtooth', gain: 0.3 });
-    this._sub(45, 1.2, 0.6);
+    this.play('game_over', { gain: 0.9 });
+  }
+
+  /** 足音（歩行に合わせてエンジンから呼ばれる）。 */
+  step() {
+    const name = 'step_' + ((Math.random() * 3) | 0);
+    this.play(name, { gain: 0.5, variance: 0.12 });
+  }
+
+  /** 街の環境音を流し始める。 */
+  startAmbience() {
+    this.wantAmbience = true;
+    if (this.ambienceNode || !this.buffers.has('ambience')) return;
+    this.ambienceNode = this.play('ambience', { gain: 0.5, loop: true, variance: 0 });
+  }
+
+  stopAmbience() {
+    this.wantAmbience = false;
+    if (!this.ambienceNode) return;
+    try { this.ambienceNode.stop(); } catch (e) { /* 既に停止済み */ }
+    this.ambienceNode = null;
+    this.wantAmbience = false;
   }
 }

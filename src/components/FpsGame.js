@@ -68,6 +68,8 @@ export default function FpsGame() {
 
     const game = new Game(canvasRef.current, {
       glCanvas: glCanvasRef.current,
+      audio: { baseUrl: `${process.env.PUBLIC_URL || ''}/audio/` },
+      models: { baseUrl: `${process.env.PUBLIC_URL || ''}/models/` },
       onEvent: (type, payload) => {
         if (type === 'wave') {
           setBanner({ text: `WAVE ${payload.wave}`, id: Date.now() });

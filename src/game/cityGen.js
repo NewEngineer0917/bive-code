@@ -10,7 +10,7 @@
  * kind:  0 = 車道、1 = 歩道、2 = 広場（通行可タイルの床の種類）
  */
 
-export const CITY_SIZE = 52;
+export const CITY_SIZE = 64;
 
 /* マテリアル番号（materials.js の並びと一致させる） */
 export const MAT = {
@@ -34,13 +34,14 @@ export function generateCity(rnd = Math.random, wave = 1) {
   const at = (x, y) => y * size + x;
 
   // --- 通りの位置を決める（幅3〜4の道路） ---
+  // 車道は 6〜8 タイル幅（2車線ぶん）。街区は 9〜14 タイル
   const streets = (limit) => {
     const list = [];
-    let pos = 2 + ((rnd() * 2) | 0);
-    while (pos < limit - 6) {
-      const width = rnd() < 0.35 ? 4 : 3;
+    let pos = 3 + ((rnd() * 3) | 0);
+    while (pos < limit - 10) {
+      const width = 6 + ((rnd() * 3) | 0);
       list.push({ pos, width });
-      pos += width + 7 + ((rnd() * 5) | 0);
+      pos += width + 9 + ((rnd() * 6) | 0);
     }
     return list;
   };
