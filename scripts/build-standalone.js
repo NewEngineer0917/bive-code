@@ -54,14 +54,16 @@ const engine = MODULES.map(wrap).join('\n\n');
 const ui = fs.readFileSync(path.join(GAME, 'standalone-ui.js'), 'utf8').trim();
 const shell = fs.readFileSync(path.join(__dirname, 'standalone-shell.html'), 'utf8');
 
-const html = `<!DOCTYPE html>
+const fragment = process.argv.includes('--fragment');
+
+const documentHtml = `<!DOCTYPE html>
 <html lang="ja">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="description" content="ブラウザで遊べるレスポンシブ対応のFPSゲーム。外部ライブラリなし、単一HTMLで動作します。">
 <meta name="theme-color" content="#070a12">
-${shell.trim()}
+${shell.trim().replace('<div id="game">', '</head>\n<body>\n<div id="game">')}
 <script>
 /* =========================================================================
    BLASTER ZONE — ゲームエンジン（外部ライブラリなし）
@@ -80,6 +82,14 @@ ${indent(ui)}
 </html>
 `;
 
+// 断片モード: Artifact などに埋め込む用に doctype/html/head/body を付けない
+const fragmentHtml = documentHtml
+  .replace(/^[\s\S]*?(?=<title>)/, '')
+  .replace('</head>\n<body>\n', '')
+  .replace(/<\/body>\n<\/html>\n?$/, '');
+
+const html = fragment ? fragmentHtml : documentHtml;
+const name = fragment ? 'artifact.html' : 'index.html';
 fs.mkdirSync(OUT_DIR, { recursive: true });
-fs.writeFileSync(path.join(OUT_DIR, 'index.html'), html);
-console.log(`dist-standalone/index.html を生成しました (${(html.length / 1024).toFixed(1)} KB)`);
+fs.writeFileSync(path.join(OUT_DIR, name), html);
+console.log(`dist-standalone/${name} を生成しました (${(html.length / 1024).toFixed(1)} KB)`);
