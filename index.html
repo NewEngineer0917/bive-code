@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="description" content="ブラウザで遊べるレスポンシブ対応のFPSゲーム。外部ライブラリなし、単一HTMLで動作します。">
 <meta name="theme-color" content="#070a12">
-<title>Blaster Zone — ブラウザFPS</title>
+<title>Blaster Zone</title>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=Zen+Kaku+Gothic+New:wght@400;700&display=swap">
 <style>
   :root {
@@ -115,6 +115,47 @@
   }
   .icon-btn:hover { border-color: var(--teal); }
   .icon-btn:active { background: rgba(75, 224, 192, 0.28); }
+
+  .chip.tier { color: #7ce8ff; border-color: rgba(124, 232, 255, 0.5); letter-spacing: 0.14em; }
+
+  .weapon {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 4px 10px;
+    background: rgba(7, 10, 18, 0.72);
+    border: 1px solid var(--line);
+    max-width: min(260px, 46vw);
+  }
+  .weapon > span {
+    font-family: var(--display);
+    font-size: clamp(10px, 2.3vw, 12px);
+    letter-spacing: 0.04em;
+    color: #cfe6ff;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .xpbar { height: 4px; background: rgba(255, 255, 255, 0.12); overflow: hidden; }
+  .xpbar > i { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--teal), #c46bff); transition: width 0.2s linear; }
+
+  #ammo-box em {
+    font-style: normal;
+    font-size: clamp(9px, 2vw, 11px);
+    letter-spacing: 0.1em;
+    color: #7ce8ff;
+  }
+
+  #banner small {
+    display: block;
+    margin-top: 8px;
+    font-family: var(--body);
+    font-size: clamp(11px, 2.6vw, 16px);
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    color: var(--text);
+    text-shadow: 0 2px 12px rgba(0, 0, 0, 0.85);
+  }
 
   #banner {
     position: absolute;
@@ -294,10 +335,15 @@
         <span class="chip" id="c-wave">WAVE 1</span>
         <span class="chip" id="c-score">SCORE 0</span>
         <span class="chip" id="c-enemies">敵 0</span>
+        <span class="chip tier" id="c-tier">8-BIT</span>
+      </div>
+      <div class="weapon">
+        <span id="w-name">ブラスター Mk.I</span>
+        <div class="xpbar"><i id="w-fill"></i></div>
       </div>
     </div>
 
-    <div id="ammo-box"><b id="ammo">48</b><small>AMMO</small></div>
+    <div id="ammo-box"><b id="ammo">48</b><small>AMMO</small><em id="w-level">Lv.1</em></div>
 
     <div class="tools">
       <button type="button" class="icon-btn" id="pause-btn" aria-label="ポーズ">❚❚</button>
@@ -318,7 +364,7 @@
     <div class="panel">
       <p class="eyebrow">SECTOR 07 / 掃討任務</p>
       <h1>BLASTER ZONE</h1>
-      <p class="lede">自動生成された迷宮に、ウェーブごとに数を増す敵が湧く。弾薬箱と救急箱を拾いながら、どこまで生き残れるか。</p>
+      <p class="lede">自動生成された迷宮に、ウェーブごとに数を増す敵が湧く。生き延びるほど<strong>映像は8BITのドット絵から最新の3D描画へ、音も同時に進化</strong>し、武器は Mk.VI まで強化されていく。</p>
       <button type="button" class="btn" data-difficulty="easy">かんたん ではじめる</button>
       <button type="button" class="btn primary" data-difficulty="normal">ふつう ではじめる</button>
       <button type="button" class="btn" data-difficulty="hard">むずかしい ではじめる</button>
@@ -332,6 +378,8 @@
         <dt>ポーズ</dt><dd>Esc ／ 画面右上の ❚❚</dd>
       </dl>
       <p class="specs">
+        <b>進化</b> 8-BIT → 16-BIT → VGA → SVGA → HD → ULTRA（1ウェーブごとに1段階）<br>
+        <b>武器</b> ブラスター Mk.I → アニヒレーター Mk.VI（撃破でXPが貯まる／強化コアで加速）<br>
         <b>敵</b> ドローン（高速・接近）／ ガンナー（射撃・距離を取る）／ ブルート（重装甲）<br>
         <b>描画</b> Canvas 2D のレイキャスティング。テクスチャ・スプライト・効果音はすべてコード生成
       </p>
@@ -695,7 +743,20 @@ window.__BZ = {};
     return c;
   }
 
-  function weaponSprite() {
+  /**
+   * 武器スプライト。レベルが上がるほど大きく、砲身が増え、発光部が派手になる。
+   */
+  const WEAPON_STYLES = [
+    { body: '#3b4569', trim: '#5a6790', cell: '#4be0c0', barrels: 1, barrelLen: 58, cellW: 46, wing: 0 },
+    { body: '#3d4a74', trim: '#63719c', cell: '#63f0d0', barrels: 1, barrelLen: 66, cellW: 52, wing: 6 },
+    { body: '#3f4a7e', trim: '#6c7cae', cell: '#7ce8ff', barrels: 2, barrelLen: 70, cellW: 56, wing: 10 },
+    { body: '#46407e', trim: '#7a72b6', cell: '#9d8bff', barrels: 2, barrelLen: 82, cellW: 60, wing: 14 },
+    { body: '#4d3a76', trim: '#8b6fc0', cell: '#c46bff', barrels: 3, barrelLen: 88, cellW: 64, wing: 18 },
+    { body: '#5c4426', trim: '#c9973f', cell: '#ffe27a', barrels: 3, barrelLen: 96, cellW: 68, wing: 24 },
+  ];
+
+  function weaponSprite(level) {
+    const st = WEAPON_STYLES[Math.max(0, Math.min(WEAPON_STYLES.length - 1, level - 1))];
     const c = canvasOf(340, 240);
     const g = c.getContext('2d');
 
@@ -739,11 +800,21 @@ window.__BZ = {};
     g.arc(160, 158, 22, 0.15, Math.PI * 0.85);
     g.stroke();
 
+    // side wings（レベルが上がると横に張り出す）
+    if (st.wing > 0) {
+      g.fillStyle = shade(st.body, 0.75);
+      g.fillRect(112 - st.wing, 92, st.wing + 8, 44);
+      g.fillRect(220, 88, st.wing + 8, 48);
+      g.fillStyle = st.cell;
+      g.fillRect(112 - st.wing + 3, 104, Math.max(3, st.wing - 4), 18);
+      g.fillRect(223, 100, Math.max(3, st.wing - 4), 22);
+    }
+
     // 本体（レシーバー）
     const body = g.createLinearGradient(0, 74, 0, 152);
-    body.addColorStop(0, '#5a6790');
-    body.addColorStop(0.5, '#3b4569');
-    body.addColorStop(1, '#242b44');
+    body.addColorStop(0, st.trim);
+    body.addColorStop(0.5, st.body);
+    body.addColorStop(1, shade(st.body, 0.6));
     g.fillStyle = body;
     g.beginPath();
     g.moveTo(112, 84);
@@ -759,27 +830,35 @@ window.__BZ = {};
 
     // エネルギーセル
     g.fillStyle = '#101627';
-    g.fillRect(122, 100, 54, 26);
-    g.fillStyle = '#4be0c0';
-    g.fillRect(126, 104, 46, 18);
-    g.fillStyle = '#a7fff0';
-    g.fillRect(126, 104, 16, 18);
+    g.fillRect(122, 100, st.cellW + 8, 26);
+    g.fillStyle = st.cell;
+    g.fillRect(126, 104, st.cellW, 18);
+    g.fillStyle = '#ffffff';
+    g.globalAlpha = 0.55;
+    g.fillRect(126, 104, Math.round(st.cellW * 0.3), 18);
+    g.globalAlpha = 1;
 
     // 上部レール＆サイト
-    g.fillStyle = '#2e3752';
+    g.fillStyle = shade(st.body, 0.8);
     g.fillRect(146, 62, 46, 24);
     g.fillStyle = '#151b2c';
     g.fillRect(160, 54, 16, 12);
 
-    // バレル
-    g.fillStyle = '#39425f';
-    g.fillRect(152, 10, 32, 58);
-    g.fillStyle = '#242c44';
-    g.fillRect(152, 10, 10, 58);
-    g.fillStyle = '#0f1422';
-    g.fillRect(146, 0, 44, 16);
-    g.fillStyle = '#4be0c0';
-    g.fillRect(150, 4, 36, 5);
+    // バレル（本数がレベルで増える）
+    const top = 68 - st.barrelLen;
+    const gap = st.barrels > 1 ? 36 / st.barrels : 0;
+    for (let i = 0; i < st.barrels; i++) {
+      const offset = (i - (st.barrels - 1) / 2) * (gap + 14);
+      const bx = 152 + offset;
+      g.fillStyle = shade(st.body, 0.95);
+      g.fillRect(bx, top, 30, st.barrelLen);
+      g.fillStyle = shade(st.body, 0.62);
+      g.fillRect(bx, top, 9, st.barrelLen);
+      g.fillStyle = '#0f1422';
+      g.fillRect(bx - 5, top - 10, 40, 16);
+      g.fillStyle = st.cell;
+      g.fillRect(bx - 1, top - 6, 32, 5);
+    }
 
     // ハンド（グリップを握る手）
     g.fillStyle = '#39415f';
@@ -791,65 +870,162 @@ window.__BZ = {};
     g.closePath();
     g.fill();
     g.fillStyle = '#2c3350';
-    for (let i = 0; i < 3; i++) {
-      g.fillRect(133 + i * 2, 152 + i * 14, 62, 5);
-    }
+    for (let i = 0; i < 3; i++) g.fillRect(133 + i * 2, 152 + i * 14, 62, 5);
 
     g.restore();
     return c;
   }
 
-  /* --------------------------------- 明暗バリエーション --------------------------------- */
+  /** 武器強化コア（拾うと武器XPが増えるアイテム）。 */
+  function coreSprite() {
+    const c = canvasOf(TEX_SIZE, TEX_SIZE);
+    const g = c.getContext('2d');
+    g.fillStyle = 'rgba(0,0,0,0.3)';
+    g.beginPath();
+    g.ellipse(32, 52, 13, 4, 0, 0, TAU);
+    g.fill();
+    const grad = g.createRadialGradient(32, 32, 2, 32, 32, 18);
+    grad.addColorStop(0, '#ffffff');
+    grad.addColorStop(0.4, '#7ce8ff');
+    grad.addColorStop(1, 'rgba(60,120,255,0)');
+    g.fillStyle = grad;
+    g.beginPath();
+    g.arc(32, 32, 18, 0, TAU);
+    g.fill();
+    g.strokeStyle = '#dff6ff';
+    g.lineWidth = 3;
+    g.beginPath();
+    g.moveTo(32, 16);
+    g.lineTo(45, 32);
+    g.lineTo(32, 48);
+    g.lineTo(19, 32);
+    g.closePath();
+    g.stroke();
+    g.fillStyle = 'rgba(255,255,255,0.85)';
+    g.beginPath();
+    g.moveTo(32, 23);
+    g.lineTo(39, 32);
+    g.lineTo(32, 41);
+    g.lineTo(25, 32);
+    g.closePath();
+    g.fill();
+    return c;
+  }
 
-  function shadedVariants(src) {
+  /* ------------------------- 解像度ティア別のアセット生成 ------------------------- */
+
+  /**
+   * 画像を res × res 相当のドット絵に粗くする（出力サイズは元のまま）。
+   * 8bit / 16bit 時代の見た目を、同じ描画コードのまま再現するための処理。
+   */
+  function pixelate(src, res) {
+    if (res >= src.width) return src;
+    const small = canvasOf(res, Math.round((res * src.height) / src.width));
+    const sg = small.getContext('2d');
+    sg.imageSmoothingEnabled = true;
+    sg.drawImage(src, 0, 0, small.width, small.height);
+
+    const out = canvasOf(src.width, src.height);
+    const og = out.getContext('2d');
+    og.imageSmoothingEnabled = false;
+    og.drawImage(small, 0, 0, out.width, out.height);
+    return out;
+  }
+
+  function shadedVariants(src, levels) {
     const out = [];
-    for (let i = 0; i < SHADE_LEVELS; i++) {
+    for (let i = 0; i < levels; i++) {
       const c = canvasOf(src.width, src.height);
       const g = c.getContext('2d');
       g.drawImage(src, 0, 0);
       g.globalCompositeOperation = 'source-atop';
-      g.fillStyle = `rgba(6,8,18,${(i / (SHADE_LEVELS - 1)) * 0.82})`;
+      g.fillStyle = `rgba(6,8,18,${(i / (levels - 1)) * 0.82})`;
       g.fillRect(0, 0, c.width, c.height);
       out.push(c);
     }
     return out;
   }
 
-  function enemyAsset(draw) {
-    return {
-      frames: [shadedVariants(draw(0, false)), shadedVariants(draw(1, false))],
-      hurt: shadedVariants(draw(0, true)),
-    };
-  }
+  /* 解像度ティアごとの設定: アートの粗さと明暗段階数 */
+  const ASSET_SETS = [
+    { texRes: 16, spriteRes: 20, shades: 4 },   // 0: ドット絵時代
+    { texRes: 32, spriteRes: 40, shades: 6 },   // 1: 中間
+    { texRes: 64, spriteRes: 64, shades: 10 },  // 2: 高精細（元データそのまま）
+  ];
 
-  let cached = null;
+  const baseCache = { walls: null, enemies: null, pickups: null, orb: null, weapons: null };
+  const setCache = [];
 
-  /** 全アセットを生成（初回のみ実行し、以降はキャッシュを返す）。 */
-  function buildAssets() {
-    if (cached) return cached;
-    cached = {
-      walls: [
+  function baseArt() {
+    if (!baseCache.walls) {
+      baseCache.walls = [
         null,
         brickWall('#7c3b3b', '#2a1d22', 11),
         panelWall('#39456b', '#4be0c0', 23),
         rockWall('#4d5566', 37),
         hazardWall(53),
-      ],
-      enemies: {
-        drone: enemyAsset(droneSprite),
-        gunner: enemyAsset(gunnerSprite),
-        brute: enemyAsset(bruteSprite),
-      },
-      pickups: {
-        ammo: shadedVariants(ammoSprite()),
-        health: shadedVariants(healthSprite()),
-      },
-      orb: shadedVariants(orbSprite('#c46bff')),
-      weapon: weaponSprite(),
-    };
-    return cached;
+      ];
+      baseCache.enemies = {
+        drone: [droneSprite(0, false), droneSprite(1, false), droneSprite(0, true)],
+        gunner: [gunnerSprite(0, false), gunnerSprite(1, false), gunnerSprite(0, true)],
+        brute: [bruteSprite(0, false), bruteSprite(1, false), bruteSprite(0, true)],
+      };
+      baseCache.pickups = { ammo: ammoSprite(), health: healthSprite(), core: coreSprite() };
+      baseCache.orb = orbSprite('#c46bff');
+      baseCache.weapons = WEAPON_STYLES.map((_, i) => weaponSprite(i + 1));
+    }
+    return baseCache;
   }
-  Object.assign(__BZ, { TEX_SIZE, SHADE_LEVELS, buildAssets });
+
+  /**
+   * 指定ティアのアセット一式を返す（必要になった時点で生成してキャッシュする）。
+   * setIndex: 0 = 低解像度, 1 = 中, 2 = 高
+   */
+  function getAssetSet(setIndex) {
+    const idx = Math.max(0, Math.min(ASSET_SETS.length - 1, setIndex));
+    if (setCache[idx]) return setCache[idx];
+
+    const conf = ASSET_SETS[idx];
+    const base = baseArt();
+    const sprite = (src) => shadedVariants(pixelate(src, conf.spriteRes), conf.shades);
+
+    const enemies = {};
+    for (const [type, imgs] of Object.entries(base.enemies)) {
+      enemies[type] = {
+        frames: [sprite(imgs[0]), sprite(imgs[1])],
+        hurt: sprite(imgs[2]),
+      };
+    }
+
+    setCache[idx] = {
+      walls: base.walls.map((w) => (w ? pixelate(w, conf.texRes) : null)),
+      enemies,
+      pickups: {
+        ammo: sprite(base.pickups.ammo),
+        health: sprite(base.pickups.health),
+        core: sprite(base.pickups.core),
+      },
+      orb: sprite(base.orb),
+      weapons: base.weapons.map((w) => pixelate(w, conf.spriteRes === 64 ? 340 : conf.spriteRes * 5)),
+      shades: conf.shades,
+    };
+    return setCache[idx];
+  }
+
+  /** 床のテクスチャ（フロアキャスティング用に生の画素配列で持つ）。 */
+  let floorTexCache = null;
+
+  function getFloorTextures() {
+    if (floorTexCache) return floorTexCache;
+    const make = (canvas) => {
+      const g = canvas.getContext('2d');
+      const { data } = g.getImageData(0, 0, canvas.width, canvas.height);
+      return { data, size: canvas.width };
+    };
+    floorTexCache = { floor: make(rockWall('#3b4152', 71)) };
+    return floorTexCache;
+  }
+  Object.assign(__BZ, { TEX_SIZE, SHADE_LEVELS, getAssetSet, getFloorTextures });
 })();
 
 /* ---------- src/game/mapGen.js ---------- */
@@ -992,16 +1168,31 @@ window.__BZ = {};
 /* ---------- src/game/audio.js ---------- */
 (function () {
   /**
-   * WebAudio で効果音を合成する簡易サウンドエンジン（音声ファイル不要）。
+   * WebAudio で効果音を合成する（音声ファイル不要）。
+   *
+   * 描画と同じく「時代」が進むほど音もリッチになる:
+   *   8bit  … 矩形波のみ・ビットクラッシュあり・モノラル
+   *   中盤  … フィルタとステレオ定位、軽いリバーブ
+   *   最新  … 波形の重ね合わせ、サブベース、深いリバーブ
+   *
    * 端末によっては AudioContext が使えないので、その場合は黙って無効化する。
    */
+
+  const DEFAULT_TIER = { crush: 5, reverb: 0, pan: false, layers: 1, sub: 0, filter: false };
+
   class Sfx {
     constructor() {
       this.ctx = null;
       this.master = null;
+      this.chainIn = null;
+      this.dry = null;
+      this.wet = null;
+      this.convolver = null;
+      this.crusher = null;
       this.muted = false;
-      this.noiseBuffer = null;
       this.failed = false;
+      this.noiseBuffer = null;
+      this.tier = DEFAULT_TIER;
     }
 
     /** ユーザー操作のタイミングで呼ぶ。AudioContext の生成・再開を行う。 */
@@ -1015,9 +1206,7 @@ window.__BZ = {};
             return null;
           }
           this.ctx = new AC();
-          this.master = this.ctx.createGain();
-          this.master.gain.value = this.muted ? 0 : 0.35;
-          this.master.connect(this.ctx.destination);
+          this._buildChain();
         }
         if (this.ctx.state === 'suspended') this.ctx.resume();
         return this.ctx;
@@ -1025,6 +1214,69 @@ window.__BZ = {};
         this.failed = true;
         return null;
       }
+    }
+
+    _buildChain() {
+      const ctx = this.ctx;
+      this.master = ctx.createGain();
+      this.master.gain.value = this.muted ? 0 : 0.35;
+      this.master.connect(ctx.destination);
+
+      // 入力 → ビットクラッシャー → ドライ/ウェット（リバーブ）→ マスター
+      this.chainIn = ctx.createGain();
+      this.crusher = ctx.createWaveShaper();
+      this.dry = ctx.createGain();
+      this.wet = ctx.createGain();
+      this.convolver = ctx.createConvolver();
+      this.convolver.buffer = this._impulse(1.6, 2.4);
+
+      this.chainIn.connect(this.crusher);
+      this.crusher.connect(this.dry);
+      this.dry.connect(this.master);
+      this.crusher.connect(this.convolver);
+      this.convolver.connect(this.wet);
+      this.wet.connect(this.master);
+
+      this._applyTier();
+    }
+
+    /** ノイズから残響のインパルス応答を作る。 */
+    _impulse(seconds, decay) {
+      const ctx = this.ctx;
+      const len = Math.max(1, Math.floor(ctx.sampleRate * seconds));
+      const buf = ctx.createBuffer(2, len, ctx.sampleRate);
+      for (let ch = 0; ch < 2; ch++) {
+        const data = buf.getChannelData(ch);
+        for (let i = 0; i < len; i++) {
+          data[i] = (Math.random() * 2 - 1) * (1 - i / len) ** decay;
+        }
+      }
+      return buf;
+    }
+
+    /** 段階的にビット数を落とすカーブ（8bit機の粗い音を再現する）。 */
+    _crushCurve(bits) {
+      const steps = 2 ** bits;
+      const curve = new Float32Array(1024);
+      for (let i = 0; i < curve.length; i++) {
+        const x = (i / (curve.length - 1)) * 2 - 1;
+        curve[i] = Math.round(x * steps) / steps;
+      }
+      return curve;
+    }
+
+    _applyTier() {
+      if (!this.ctx) return;
+      const t = this.tier;
+      this.crusher.curve = t.crush ? this._crushCurve(t.crush) : null;
+      this.wet.gain.value = t.reverb;
+      this.dry.gain.value = 1 - t.reverb * 0.35;
+    }
+
+    /** 描画ティアに合わせて音の質感を切り替える。 */
+    setTier(audioTier) {
+      this.tier = { ...DEFAULT_TIER, ...(audioTier || {}) };
+      this._applyTier();
     }
 
     setMuted(muted) {
@@ -1043,69 +1295,105 @@ window.__BZ = {};
       return this.noiseBuffer;
     }
 
-    tone({ freq = 440, to = freq, dur = 0.15, type = 'square', gain = 0.4, delay = 0 }) {
+    /** 音源の出力先（ティアに応じてステレオ定位を挟む）。pan: -1〜1 */
+    _out(pan) {
+      const ctx = this.ctx;
+      if (!this.tier.pan || !ctx.createStereoPanner || !pan) return this.chainIn;
+      const p = ctx.createStereoPanner();
+      p.pan.value = Math.max(-1, Math.min(1, pan));
+      p.connect(this.chainIn);
+      return p;
+    }
+
+    tone({ freq = 440, to = freq, dur = 0.15, type = 'square', gain = 0.4, delay = 0, pan = 0 }) {
       const ctx = this.resume();
       if (!ctx || this.muted) return;
       const t = ctx.currentTime + delay;
       const osc = ctx.createOscillator();
       const g = ctx.createGain();
-      osc.type = type;
+      osc.type = this.tier.layers > 1 ? type : (type === 'sine' ? 'square' : type);
       osc.frequency.setValueAtTime(freq, t);
       osc.frequency.exponentialRampToValueAtTime(Math.max(20, to), t + dur);
       g.gain.setValueAtTime(0.0001, t);
       g.gain.exponentialRampToValueAtTime(gain, t + 0.008);
       g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-      osc.connect(g).connect(this.master);
+      osc.connect(g).connect(this._out(pan));
       osc.start(t);
       osc.stop(t + dur + 0.02);
     }
 
-    burst({ dur = 0.2, gain = 0.35, freq = 1200, q = 1, delay = 0 }) {
+    burst({ dur = 0.2, gain = 0.35, freq = 1200, q = 1, delay = 0, pan = 0 }) {
       const ctx = this.resume();
       if (!ctx || this.muted) return;
       const t = ctx.currentTime + delay;
       const src = ctx.createBufferSource();
       src.buffer = this._noise();
-      const filter = ctx.createBiquadFilter();
-      filter.type = 'bandpass';
-      filter.frequency.setValueAtTime(freq, t);
-      filter.Q.value = q;
       const g = ctx.createGain();
       g.gain.setValueAtTime(gain, t);
       g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-      src.connect(filter).connect(g).connect(this.master);
+
+      let node = src;
+      if (this.tier.filter) {
+        const filter = ctx.createBiquadFilter();
+        filter.type = 'bandpass';
+        filter.frequency.setValueAtTime(freq, t);
+        filter.frequency.exponentialRampToValueAtTime(Math.max(120, freq * 0.35), t + dur);
+        filter.Q.value = q;
+        src.connect(filter);
+        node = filter;
+      }
+      node.connect(g).connect(this._out(pan));
       src.start(t);
       src.stop(t + dur + 0.02);
     }
 
-    shoot() {
-      this.tone({ freq: 900, to: 160, dur: 0.1, type: 'square', gain: 0.22 });
+    /** 低音の芯（高ティアのみ）。 */
+    _sub(freq, dur, gain) {
+      if (!this.tier.sub) return;
+      this.tone({ freq, to: freq * 0.4, dur, type: 'sine', gain: gain * this.tier.sub });
+    }
+
+    /* --------------------------------- 効果音 --------------------------------- */
+
+    shoot(level = 1) {
+      const t = this.tier;
+      const base = 900 + level * 40;
+      this.tone({ freq: base, to: 160, dur: 0.1, type: 'square', gain: 0.2 });
       this.burst({ dur: 0.09, gain: 0.16, freq: 2400 });
+      if (t.layers >= 2) this.tone({ freq: base * 0.5, to: 120, dur: 0.16, type: 'sawtooth', gain: 0.12 });
+      if (t.layers >= 3) this.burst({ dur: 0.28, gain: 0.08, freq: 700, q: 0.7, delay: 0.02 });
+      this._sub(110, 0.18, 0.3);
     }
 
     empty() {
       this.tone({ freq: 220, to: 140, dur: 0.06, type: 'triangle', gain: 0.15 });
     }
 
-    hit() {
-      this.burst({ dur: 0.08, gain: 0.2, freq: 900, q: 2 });
+    hit(pan = 0) {
+      this.burst({ dur: 0.08, gain: 0.2, freq: 900, q: 2, pan });
+      if (this.tier.layers >= 2) this.tone({ freq: 520, to: 300, dur: 0.07, type: 'triangle', gain: 0.1, pan });
     }
 
-    kill() {
-      this.tone({ freq: 320, to: 60, dur: 0.4, type: 'sawtooth', gain: 0.25 });
-      this.burst({ dur: 0.35, gain: 0.2, freq: 500 });
+    kill(pan = 0) {
+      this.tone({ freq: 320, to: 60, dur: 0.4, type: 'sawtooth', gain: 0.24, pan });
+      this.burst({ dur: 0.35, gain: 0.2, freq: 500, pan });
+      if (this.tier.layers >= 2) this.burst({ dur: 0.6, gain: 0.1, freq: 220, q: 0.6, delay: 0.04, pan });
+      this._sub(70, 0.5, 0.45);
     }
 
     hurt() {
       this.tone({ freq: 180, to: 70, dur: 0.28, type: 'sawtooth', gain: 0.3 });
+      if (this.tier.layers >= 2) this.burst({ dur: 0.3, gain: 0.12, freq: 300, q: 0.8 });
+      this._sub(55, 0.4, 0.4);
     }
 
-    enemyShot() {
-      this.tone({ freq: 420, to: 900, dur: 0.16, type: 'sine', gain: 0.14 });
+    enemyShot(pan = 0) {
+      this.tone({ freq: 420, to: 900, dur: 0.16, type: 'sine', gain: 0.13, pan });
     }
 
     pickup() {
       this.tone({ freq: 620, to: 1180, dur: 0.14, type: 'triangle', gain: 0.22 });
+      if (this.tier.layers >= 2) this.tone({ freq: 1240, to: 1860, dur: 0.12, type: 'sine', gain: 0.1, delay: 0.06 });
     }
 
     wave() {
@@ -1114,16 +1402,197 @@ window.__BZ = {};
       this.tone({ freq: 800, to: 800, dur: 0.3, type: 'square', gain: 0.2, delay: 0.34 });
     }
 
+    /** 武器レベルアップ音（上昇アルペジオ） */
+    weaponUp() {
+      const notes = [523, 659, 784, 1046];
+      notes.forEach((f, i) => {
+        this.tone({ freq: f, to: f, dur: 0.22, type: 'triangle', gain: 0.2, delay: i * 0.09 });
+        if (this.tier.layers >= 2) {
+          this.tone({ freq: f * 2, to: f * 2, dur: 0.16, type: 'sine', gain: 0.09, delay: i * 0.09 + 0.02 });
+        }
+      });
+      this._sub(90, 0.5, 0.4);
+    }
+
+    /** 描画ティアが上がったときのファンファーレ */
+    tierUp() {
+      this.tone({ freq: 300, to: 900, dur: 0.5, type: 'sawtooth', gain: 0.16 });
+      this.tone({ freq: 900, to: 1400, dur: 0.4, type: 'sine', gain: 0.12, delay: 0.2 });
+      this._sub(60, 0.7, 0.5);
+    }
+
     gameOver() {
       this.tone({ freq: 400, to: 60, dur: 1.1, type: 'sawtooth', gain: 0.3 });
+      this._sub(45, 1.2, 0.6);
     }
   }
   Object.assign(__BZ, { Sfx });
 })();
 
+/* ---------- src/game/fidelity.js ---------- */
+(function () {
+  /**
+   * 描画・音・武器の「時代進化」を定義するティア表。
+   *
+   * ウェーブが進むごとにティアが 1 段上がり、8bit のドット絵から
+   * 高解像度の 3D 描画へ、チープな電子音から厚みのある効果音へと変化する。
+   */
+
+  /* DawnBringer 16: ドット絵時代を強く感じさせる定番の16色パレット */
+  const PALETTE_16 = [
+    '#140c1c', '#442434', '#30346d', '#4e4a4e', '#854c30', '#346524', '#d04648', '#757161',
+    '#597dce', '#d27d2c', '#8595a1', '#6daa2c', '#d2aa99', '#6dc2ca', '#dad45e', '#deeed6',
+  ];
+
+  /* 16色を補間して増やした32色（16bit機の色数感） */
+  const PALETTE_32 = (() => {
+    const out = PALETTE_16.slice();
+    for (let i = 0; i < 16; i += 1) {
+      const a = PALETTE_16[i];
+      const b = PALETTE_16[(i + 5) % 16];
+      const mix = (x, y) => Math.round((parseInt(x, 16) + parseInt(y, 16)) / 2);
+      const r = mix(a.slice(1, 3), b.slice(1, 3));
+      const g = mix(a.slice(3, 5), b.slice(3, 5));
+      const bl = mix(a.slice(5, 7), b.slice(5, 7));
+      out.push(`#${[r, g, bl].map((v) => v.toString(16).padStart(2, '0')).join('')}`);
+    }
+    return out;
+  })();
+
+  /**
+   * assetSet: 0 = 低解像度アート, 1 = 中解像度, 2 = 高解像度（元データ）
+   * palette:  固定パレットに丸める場合はその配列
+   * colorLevels: パレットを使わない場合のチャンネルあたり階調数（0 = 丸めない）
+   */
+  const TIERS = [
+    {
+      id: 0,
+      label: '8-BIT',
+      note: 'ドット絵・16色・低解像度',
+      scale: 0.20, maxWidth: 260, smoothing: false,
+      assetSet: 0, shadeLevels: 3,
+      palette: PALETTE_16, colorLevels: 0,
+      floor: 'flat', lights: false, scanline: 0.5, bloom: 0, ao: false,
+      audio: { crush: 5, reverb: 0, pan: false, layers: 1, sub: 0, filter: false },
+    },
+    {
+      id: 1,
+      label: '16-BIT',
+      note: '色数と解像度が向上',
+      scale: 0.30, maxWidth: 380, smoothing: false,
+      assetSet: 0, shadeLevels: 4,
+      palette: PALETTE_32, colorLevels: 0,
+      floor: 'flat', lights: false, scanline: 0.34, bloom: 0, ao: false,
+      audio: { crush: 7, reverb: 0.05, pan: false, layers: 1, sub: 0, filter: true },
+    },
+    {
+      id: 2,
+      label: 'VGA',
+      note: 'テクスチャ精細化・階調表現',
+      scale: 0.44, maxWidth: 520, smoothing: false,
+      assetSet: 1, shadeLevels: 6,
+      palette: null, colorLevels: 6,
+      floor: 'gradient', lights: false, scanline: 0.16, bloom: 0, ao: false,
+      audio: { crush: 0, reverb: 0.12, pan: true, layers: 2, sub: 0, filter: true },
+    },
+    {
+      id: 3,
+      label: 'SVGA',
+      note: '床の描画と動的ライティング',
+      scale: 0.62, maxWidth: 680, smoothing: true,
+      assetSet: 1, shadeLevels: 8,
+      palette: null, colorLevels: 0,
+      floor: 'textured', lights: true, scanline: 0.06, bloom: 0.10, ao: true,
+      audio: { crush: 0, reverb: 0.2, pan: true, layers: 2, sub: 0.3, filter: true },
+    },
+    {
+      id: 4,
+      label: 'HD',
+      note: '高解像度・柔らかな陰影',
+      scale: 0.84, maxWidth: 780, smoothing: true,
+      assetSet: 2, shadeLevels: 10,
+      palette: null, colorLevels: 0,
+      floor: 'textured', lights: true, scanline: 0, bloom: 0.16, ao: true,
+      audio: { crush: 0, reverb: 0.28, pan: true, layers: 3, sub: 0.55, filter: true },
+    },
+    {
+      id: 5,
+      label: 'ULTRA',
+      note: '最高精細・ブルームと環境光',
+      scale: 0.95, maxWidth: 900, smoothing: true,
+      assetSet: 2, shadeLevels: 12,
+      palette: null, colorLevels: 0,
+      floor: 'textured', lights: true, scanline: 0, bloom: 0.24, ao: true,
+      audio: { crush: 0, reverb: 0.36, pan: true, layers: 3, sub: 0.85, filter: true },
+    },
+  ];
+
+  /** ウェーブ数から描画ティアを決める（1ウェーブごとに1段進化する）。 */
+  function tierForWave(wave) {
+    return TIERS[Math.max(0, Math.min(TIERS.length - 1, wave - 1))];
+  }
+
+  /**
+   * 武器のレベル定義。撃破で貯まる XP でランクアップする。
+   * xp は「そのレベルになるまでに必要な累計 XP」。
+   */
+  const WEAPON_LEVELS = [
+    {
+      level: 1, name: 'ブラスター Mk.I', xp: 0,
+      damage: 34, interval: 0.14, pellets: 1, spread: 0.028, magazine: 99,
+      perk: '標準装備',
+    },
+    {
+      level: 2, name: 'ブラスター Mk.II', xp: 8,
+      damage: 42, interval: 0.125, pellets: 1, spread: 0.024, magazine: 110,
+      perk: '威力と連射速度が向上',
+    },
+    {
+      level: 3, name: 'デュアルボルト Mk.III', xp: 22,
+      damage: 46, interval: 0.115, pellets: 2, spread: 0.05, magazine: 120,
+      perk: '2連射（拡散）',
+    },
+    {
+      level: 4, name: 'パルスランス Mk.IV', xp: 44,
+      damage: 58, interval: 0.1, pellets: 2, spread: 0.042, magazine: 130,
+      perk: '貫通弾：敵を1体まで貫く',
+      pierce: 1,
+    },
+    {
+      level: 5, name: 'ヴォイドレイ Mk.V', xp: 76,
+      damage: 68, interval: 0.09, pellets: 3, spread: 0.06, magazine: 140,
+      perk: '3連射・貫通強化',
+      pierce: 2,
+    },
+    {
+      level: 6, name: 'アニヒレーター Mk.VI', xp: 120,
+      damage: 86, interval: 0.075, pellets: 3, spread: 0.05, magazine: 160,
+      perk: '最大出力・貫通3体',
+      pierce: 3,
+    },
+  ];
+
+  /** 累計XPから武器レベル定義を引く。 */
+  function weaponForXp(xp) {
+    let found = WEAPON_LEVELS[0];
+    for (const def of WEAPON_LEVELS) if (xp >= def.xp) found = def;
+    return found;
+  }
+
+  /** 次のレベルまでの進捗（0〜1）と次の定義。最大レベルなら next は null。 */
+  function weaponProgress(xp) {
+    const current = weaponForXp(xp);
+    const next = WEAPON_LEVELS[current.level] || null;
+    if (!next) return { current, next: null, ratio: 1 };
+    const span = next.xp - current.xp;
+    return { current, next, ratio: Math.max(0, Math.min(1, (xp - current.xp) / span)) };
+  }
+  Object.assign(__BZ, { TIERS, tierForWave, WEAPON_LEVELS, weaponForXp, weaponProgress });
+})();
+
 /* ---------- src/game/engine.js ---------- */
 (function () {
-  const { buildAssets, SHADE_LEVELS, generateMap, createRng, Sfx } = __BZ;
+  const { getAssetSet, getFloorTextures, generateMap, createRng, Sfx, TIERS, tierForWave, weaponForXp, weaponProgress } = __BZ;
   /**
    * レイキャスティング方式の 3D FPS エンジン（Canvas 2D のみ / 外部ライブラリなし）。
    *
@@ -1138,10 +1607,10 @@ window.__BZ = {};
   const WALK_SPEED = 3.1;
   const SPRINT_SPEED = 4.5;
   const KEY_TURN_SPEED = 2.6;
-  const MAX_AMMO = 99;
-  const FIRE_INTERVAL = 0.14;
-  const BULLET_DAMAGE = 34;
   const FOG_DISTANCE = 13;
+
+  /* 撃破で得られる武器XP */
+  const XP_BY_TYPE = { drone: 1, gunner: 2, brute: 4 };
 
   const DIFFICULTIES = {
     easy: { key: 'easy', label: 'かんたん', hp: 140, ammo: 64, dmg: 0.65, spd: 0.9, count: 0.8 },
@@ -1166,6 +1635,54 @@ window.__BZ = {};
 
   const clamp = (v, a, b) => (v < a ? a : v > b ? b : v);
 
+  /**
+   * 固定パレットへの最近色変換テーブル（5bit RGB → パレット色）。
+   * ドット絵ティアで画面全体を 16 色などに丸めるために使う。
+   */
+  const lutCache = new Map();
+
+  function paletteLut(palette) {
+    const key = palette.join('');
+    if (lutCache.has(key)) return lutCache.get(key);
+
+    const colors = palette.map((hex) => [
+      parseInt(hex.slice(1, 3), 16),
+      parseInt(hex.slice(3, 5), 16),
+      parseInt(hex.slice(5, 7), 16),
+    ]);
+    const lut = new Uint8Array(32 * 32 * 32 * 3);
+    for (let r = 0; r < 32; r++) {
+      for (let g = 0; g < 32; g++) {
+        for (let b = 0; b < 32; b++) {
+          const R = r * 8;
+          const G = g * 8;
+          const B = b * 8;
+          let best = 0;
+          let bestD = Infinity;
+          for (let i = 0; i < colors.length; i++) {
+            const c = colors[i];
+            const d = (c[0] - R) ** 2 + (c[1] - G) ** 2 + (c[2] - B) ** 2;
+            if (d < bestD) { bestD = d; best = i; }
+          }
+          const idx = ((r << 10) | (g << 5) | b) * 3;
+          lut[idx] = colors[best][0];
+          lut[idx + 1] = colors[best][1];
+          lut[idx + 2] = colors[best][2];
+        }
+      }
+    }
+    lutCache.set(key, lut);
+    return lut;
+  }
+
+  /** 階調を n 段に丸めるルックアップテーブル。 */
+  function quantizeLut(n) {
+    const lut = new Uint8Array(256);
+    const step = 255 / (n - 1);
+    for (let i = 0; i < 256; i++) lut[i] = Math.round(Math.round(i / step) * step);
+    return lut;
+  }
+
   function normAngle(a) {
     while (a > Math.PI) a -= TAU;
     while (a < -Math.PI) a += TAU;
@@ -1176,7 +1693,6 @@ window.__BZ = {};
     constructor(canvas, { onEvent } = {}) {
       this.canvas = canvas;
       this.ctx = canvas.getContext('2d', { alpha: false });
-      this.assets = buildAssets();
       this.sfx = new Sfx();
       this.onEvent = onEvent || (() => {});
 
@@ -1205,6 +1721,22 @@ window.__BZ = {};
       this._shades = [];
       for (let i = 0; i <= 24; i++) this._shades.push(`rgba(6,8,18,${(i / 24).toFixed(3)})`);
 
+      // 描画は一度オフスクリーンに描いてから画面へ引き伸ばす。
+      // このバッファの解像度と後処理がティアごとの「時代」を作る。
+      this.buf = document.createElement('canvas');
+      this.bctx = this.buf.getContext('2d', { alpha: false });
+      this.bloomBuf = document.createElement('canvas');
+      this.lights = [];
+
+      this.tier = TIERS[0];
+      this.assets = getAssetSet(this.tier.assetSet);
+      this.paletteLut = null;
+
+      // 描画負荷に応じて解像度を自動調整する（弱い端末でも 60fps を保つため）
+      this.quality = 1;
+      this._frameAvg = 16;
+      this._qualityTimer = 0;
+
       this.resize();
     }
 
@@ -1229,8 +1761,29 @@ window.__BZ = {};
       if (!isFinite(dt) || dt <= 0) dt = 1 / 60;
       dt = Math.min(dt, 0.05);
       if (this.state === 'playing') this.update(dt);
-      this.render(dt);
+      this.render();
+      this.autoQuality(dt);
     };
+
+    /**
+     * 直近のフレーム時間から解像度を上下させる。
+     * 重ければ落として滑らかさを優先し、余裕があれば徐々に戻す。
+     */
+    autoQuality(dt) {
+      this._frameAvg += (dt * 1000 - this._frameAvg) * 0.05;
+      this._qualityTimer += dt;
+      if (this._qualityTimer < 1.5 || this.state !== 'playing') return;
+      this._qualityTimer = 0;
+
+      let next = this.quality;
+      if (this._frameAvg > 26 && this.quality > 0.55) next = Math.max(0.55, this.quality - 0.15);
+      else if (this._frameAvg < 14 && this.quality < 1) next = Math.min(1, this.quality + 0.1);
+      if (next !== this.quality) {
+        this.quality = next;
+        this.applyTier(this.tier, true);
+        this._frameAvg = 16;
+      }
+    }
 
     resize() {
       const rect = this.canvas.getBoundingClientRect();
@@ -1243,32 +1796,70 @@ window.__BZ = {};
 
       this.canvas.width = Math.round(cssW * dpr);
       this.canvas.height = Math.round(cssH * dpr);
-      this.ctx.imageSmoothingEnabled = false;
       this.W = this.canvas.width;
       this.H = this.canvas.height;
-
-      // 1 本のレイが担当する横幅（端末性能に応じて解像度を落とす）
-      const targetRays = coarse ? 300 : 460;
-      this.colW = Math.max(2, Math.ceil(this.W / targetRays));
-      this.rays = Math.ceil(this.W / this.colW);
-      this.zbuf = new Float32Array(this.rays);
+      this.coarse = coarse;
 
       // 画角：横長なら広く、縦長では狭くして歪みを防ぐ
       const aspect = this.W / this.H;
       const hFovDeg = aspect >= 1.5 ? 78 : aspect >= 1 ? 72 : 56;
       this.planeLen = Math.tan((hFovDeg * Math.PI) / 360);
-      // 正方形ピクセルを保つ投影係数（1 単位の壁が距離 1 で占める画面高の割合）
-      this.proj = clamp(this.W / 2 / (this.planeLen * this.H), 0.4, 1.25);
       this.uiScale = clamp(Math.min(this.W, this.H) / 720, 0.6, 2.4);
 
-      const g1 = this.ctx.createLinearGradient(0, 0, 0, this.H * 0.5);
+      this.applyTier(this.tier, true);
+    }
+
+    /**
+     * 描画ティアを適用する。
+     * オフスクリーンバッファの解像度、アセットの粗さ、後処理、音の質感が
+     * すべてここで切り替わる。
+     */
+    applyTier(tier, force = false) {
+      if (!force && this.tier === tier) return;
+      this.tier = tier;
+      this.assets = getAssetSet(tier.assetSet);
+      this.sfx.setTier(tier.audio);
+
+      // バッファ解像度（モバイルでは上限を下げる）
+      const cap = Math.round(tier.maxWidth * (this.coarse ? 0.72 : 1) * this.quality);
+      const bw = Math.max(160, Math.min(cap, Math.round(this.W * tier.scale * this.quality)));
+      const bh = Math.max(90, Math.round((bw * this.H) / this.W));
+      this.buf.width = bw;
+      this.buf.height = bh;
+      this.bufW = bw;
+      this.bufH = bh;
+      this.bloomBuf.width = Math.max(32, Math.round(bw / 3));
+      this.bloomBuf.height = Math.max(18, Math.round(bh / 3));
+
+      // 解像度が高いティアは 1 レイ＝2px にして壁のループ回数を抑える
+      this.colW = bw >= 700 ? 2 : 1;
+      this.rays = Math.ceil(bw / this.colW);
+      this.zbuf = new Float32Array(this.rays);
+      this.hitX = new Float32Array(this.rays);
+      this.hitY = new Float32Array(this.rays);
+
+      // 減色用のルックアップテーブル（毎フレームの除算を避ける）
+      this.levelLut = tier.colorLevels ? quantizeLut(tier.colorLevels) : null;
+
+      // 床テクスチャ描画用のバッファ（読み戻しを避けるため毎フレーム全上書きする）
+      this.floorBand = null;
+
+      // 正方形ピクセルを保つ投影係数（1 単位の壁が距離 1 で占める画面高の割合）
+      this.proj = clamp(bw / 2 / (this.planeLen * bh), 0.4, 1.25);
+
+      this.bctx.imageSmoothingEnabled = false;
+
+      const g1 = this.bctx.createLinearGradient(0, 0, 0, bh * 0.5);
       g1.addColorStop(0, '#05060d');
       g1.addColorStop(1, '#1b2138');
       this.ceilGrad = g1;
-      const g2 = this.ctx.createLinearGradient(0, this.H * 0.5, 0, this.H);
+      const g2 = this.bctx.createLinearGradient(0, bh * 0.5, 0, bh);
       g2.addColorStop(0, '#171a24');
       g2.addColorStop(1, '#3a3f52');
       this.floorGrad = g2;
+
+      this.paletteLut = tier.palette ? paletteLut(tier.palette) : null;
+      this.floorTex = tier.floor === 'textured' ? getFloorTextures() : null;
     }
 
     /* --------------------------------- ゲーム進行 -------------------------------- */
@@ -1296,12 +1887,18 @@ window.__BZ = {};
       this.shake = 0;
       this.bob = 0;
 
+      // 各ティアのアセットを先に作っておき、進化のたびに固まらないようにする
+      for (let i = 0; i < 3; i++) getAssetSet(i);
+
+      const weapon = weaponForXp(0);
       this.player = {
         x: 1.5, y: 1.5, angle: 0.7,
         hp: d.hp, maxHp: d.hp,
         ammo: d.ammo, score: 0,
         fireCd: 0, recoil: 0, flash: 0, hurtT: 0,
+        xp: 0, weapon,
       };
+      this.applyTier(tierForWave(1), true);
       // 開けている方向を向いて開始する
       if (!this.isWall(2.5, 1.5)) this.player.angle = 0;
       else if (!this.isWall(1.5, 2.5)) this.player.angle = Math.PI / 2;
@@ -1315,6 +1912,14 @@ window.__BZ = {};
     startWave() {
       this.wave++;
       const d = this.difficulty;
+
+      // ウェーブが進むごとに描画・音の「時代」が 1 段進む
+      const tier = tierForWave(this.wave);
+      if (tier !== this.tier) {
+        this.applyTier(tier);
+        this.sfx.tierUp();
+        this.onEvent('tier', { label: tier.label, note: tier.note, id: tier.id });
+      }
       const count = Math.max(3, Math.min(16, Math.round((3 + this.wave * 1.6) * d.count)));
       this.spawnQueue = [];
       for (let i = 0; i < count; i++) {
@@ -1324,6 +1929,7 @@ window.__BZ = {};
       this.spawnPickup('ammo');
       this.spawnPickup('ammo');
       if (this.wave % 2 === 0) this.spawnPickup('health');
+      if (this.wave >= 2) this.spawnPickup('core'); // 武器強化コア
       this.sfx.wave();
       this.onEvent('wave', { wave: this.wave });
     }
@@ -1397,16 +2003,25 @@ window.__BZ = {};
     getHud() {
       const p = this.player;
       if (!p) return { hp: 0, maxHp: 100, ammo: 0, score: 0, wave: 0, enemies: 0, hurt: 0 };
+      const prog = weaponProgress(p.xp);
       return {
         hp: Math.max(0, Math.ceil(p.hp)),
         maxHp: p.maxHp,
         ammo: p.ammo,
+        maxAmmo: p.weapon.magazine,
         score: p.score,
         wave: this.wave,
         enemies: this.enemies.filter((e) => !e.dying).length + this.spawnQueue.length,
         hurt: clamp(p.hurtT / 0.5, 0, 1),
         kills: this.kills,
         time: this.elapsed,
+        weapon: p.weapon.name,
+        weaponLevel: p.weapon.level,
+        weaponPerk: p.weapon.perk,
+        weaponRatio: prog.ratio,
+        weaponMax: !prog.next,
+        tier: this.tier.label,
+        tierId: this.tier.id,
       };
     }
 
@@ -1555,6 +2170,7 @@ window.__BZ = {};
       p.hurtT = Math.max(0, p.hurtT - dt);
       this.shake = Math.max(0, this.shake - dt * 2.2);
 
+      this.pitchBuf = this.pitch * this.bufH;
       this.updatePlayer(dt);
       if (this.input.firing) this.fire();
 
@@ -1587,7 +2203,8 @@ window.__BZ = {};
           this.waveBreak = 2.6;
           p.score += 200 * this.wave;
           p.hp = Math.min(p.maxHp, p.hp + 15);
-          p.ammo = Math.min(MAX_AMMO, p.ammo + 12);
+          p.ammo = Math.min(p.weapon.magazine, p.ammo + 12);
+          this.addWeaponXp(3);
           this.onEvent('waveclear', { wave: this.wave });
         } else {
           this.waveBreak -= dt;
@@ -1775,8 +2392,10 @@ window.__BZ = {};
         it.anim += dt;
         if (Math.hypot(it.x - p.x, it.y - p.y) > 0.55) continue;
         if (it.kind === 'ammo') {
-          if (p.ammo >= MAX_AMMO) continue;
-          p.ammo = Math.min(MAX_AMMO, p.ammo + 16);
+          if (p.ammo >= p.weapon.magazine) continue;
+          p.ammo = Math.min(p.weapon.magazine, p.ammo + 16);
+        } else if (it.kind === 'core') {
+          this.addWeaponXp(5);
         } else {
           if (p.hp >= p.maxHp) continue;
           p.hp = Math.min(p.maxHp, p.hp + 28);
@@ -1805,39 +2424,88 @@ window.__BZ = {};
 
     /* ---------------------------------- 射撃 ---------------------------------- */
 
-    /** 画面中央（照準）にいる敵を返す。 */
-    aimTarget(spread = 0) {
+    /**
+     * 指定角度の射線上にいる敵を、近い順に最大 max 体返す。
+     * 貫通武器はここで複数体を拾う。
+     */
+    aimTargets(spread = 0, max = 1) {
       const p = this.player;
-      if (!p) return { enemy: null };
+      if (!p) return [];
       const angle = p.angle + spread;
       const dirX = Math.cos(angle);
       const dirY = Math.sin(angle);
       const wall = this.castRay(p.x, p.y, dirX, dirY).dist;
 
-      let best = null;
-      let bestDist = Infinity;
+      const hits = [];
       for (const e of this.enemies) {
         if (e.dying) continue;
         const dx = e.x - p.x;
         const dy = e.y - p.y;
         const dist = Math.hypot(dx, dy);
-        if (dist < 0.05 || dist > wall || dist >= bestDist) continue;
+        if (dist < 0.05 || dist > wall) continue;
         const da = normAngle(Math.atan2(dy, dx) - angle);
         if (Math.abs(da) > Math.atan2(e.radius, dist)) continue;
         // 上下方向：ピッチを考慮して当たり判定する
-        const h = (this.proj * this.H * e.scale) / dist;
+        const h = (this.proj * this.bufH * e.scale) / dist;
         const vWorld = 0.5 - e.scale / 2 - (e.def.hover || 0);
-        const offsetY = this.pitch + (vWorld * this.proj * this.H) / dist;
-        if (Math.abs(offsetY) > h / 2 + this.H * 0.02) continue;
-        best = e;
-        bestDist = dist;
+        const offsetY = this.pitchBuf + (vWorld * this.proj * this.bufH) / dist;
+        if (Math.abs(offsetY) > h / 2 + this.bufH * 0.02) continue;
+        hits.push({ enemy: e, dist });
       }
-      return { enemy: best, dist: bestDist };
+      hits.sort((a, b) => a.dist - b.dist);
+      return hits.slice(0, max);
+    }
+
+    /** 照準に敵が入っているか（クロスヘアの色に使う）。 */
+    aimTarget(spread = 0) {
+      const hit = this.aimTargets(spread, 1)[0];
+      return { enemy: hit ? hit.enemy : null, dist: hit ? hit.dist : Infinity };
+    }
+
+    /** 武器XPを加算し、レベルが上がったら通知する。 */
+    addWeaponXp(amount) {
+      const p = this.player;
+      if (!p) return;
+      const before = p.weapon.level;
+      p.xp += amount;
+      const next = weaponForXp(p.xp);
+      if (next.level !== before) {
+        p.weapon = next;
+        p.ammo = Math.min(next.magazine, p.ammo + 20); // 強化時に弾も補充
+        this.sfx.weaponUp();
+        this.onEvent('weaponup', { name: next.name, level: next.level, perk: next.perk });
+      }
+    }
+
+    /** 敵を倒したときの処理（スコア・XP・ドロップ）。 */
+    killEnemy(enemy) {
+      const p = this.player;
+      enemy.dying = 0.001;
+      this.kills++;
+      p.score += enemy.def.score;
+      this.addWeaponXp(XP_BY_TYPE[enemy.type] || 1);
+      this.sfx.kill(this.panOf(enemy));
+
+      const roll = Math.random();
+      const drop = roll < 0.26 ? 'ammo' : roll < 0.38 ? 'health' : roll < 0.44 ? 'core' : null;
+      if (drop) {
+        if (this.pickups.length >= 14) this.pickups.shift(); // 拾われずに溜まり続けるのを防ぐ
+        this.pickups.push({ kind: drop, x: enemy.x, y: enemy.y, anim: 0 });
+      }
+    }
+
+    /** 音のステレオ定位（プレイヤーから見て左右どちらにいるか）。 */
+    panOf(entity) {
+      const p = this.player;
+      if (!p) return 0;
+      const da = normAngle(Math.atan2(entity.y - p.y, entity.x - p.x) - p.angle);
+      return clamp(da / (Math.PI / 2), -1, 1);
     }
 
     fire() {
       if (this.state !== 'playing') return;
       const p = this.player;
+      const w = p.weapon;
       if (p.fireCd > 0) return;
       if (p.ammo <= 0) {
         p.fireCd = 0.4;
@@ -1845,31 +2513,24 @@ window.__BZ = {};
         return;
       }
       p.ammo--;
-      p.fireCd = FIRE_INTERVAL;
+      p.fireCd = w.interval;
       p.recoil = 1;
-      p.flash = 0.06;
-      this.shake = Math.min(1, this.shake + 0.12);
-      this.sfx.shoot();
+      p.flash = 0.06 + w.level * 0.008;
+      this.shake = Math.min(1, this.shake + 0.1 + w.level * 0.01);
+      this.sfx.shoot(w.level);
 
-      const spread = (Math.random() - 0.5) * 0.028;
-      const { enemy } = this.aimTarget(spread);
-      if (!enemy) return;
-      enemy.hp -= BULLET_DAMAGE;
-      enemy.hurtT = 0.12;
-      enemy.awake = true;
-      if (enemy.hp <= 0) {
-        enemy.dying = 0.001;
-        this.kills++;
-        p.score += enemy.def.score;
-        this.sfx.kill();
-        const roll = Math.random();
-        const drop = roll < 0.28 ? 'ammo' : roll < 0.4 ? 'health' : null;
-        if (drop) {
-          if (this.pickups.length >= 14) this.pickups.shift(); // 拾われずに溜まり続けるのを防ぐ
-          this.pickups.push({ kind: drop, x: enemy.x, y: enemy.y, anim: 0 });
+      const pierce = 1 + (w.pierce || 0);
+      for (let i = 0; i < w.pellets; i++) {
+        // 複数弾は左右に振り分けて撃つ
+        const offset = w.pellets === 1 ? 0 : (i / (w.pellets - 1) - 0.5) * w.spread * 2;
+        const spread = offset + (Math.random() - 0.5) * w.spread;
+        for (const { enemy } of this.aimTargets(spread, pierce)) {
+          enemy.hp -= w.damage;
+          enemy.hurtT = 0.12;
+          enemy.awake = true;
+          if (enemy.hp <= 0) this.killEnemy(enemy);
+          else this.sfx.hit(this.panOf(enemy));
         }
-      } else {
-        this.sfx.hit();
       }
     }
 
@@ -1879,56 +2540,95 @@ window.__BZ = {};
       const p = this.player;
       if (!p || this.state !== 'playing') return;
       p.angle = normAngle(p.angle + dx);
-      this.pitch = clamp(this.pitch - dy * this.H, -this.H * 0.32, this.H * 0.32);
+      // pitch は画面高に対する割合で保持する（解像度が変わっても見た目が変わらない）
+      this.pitch = clamp(this.pitch - dy, -0.32, 0.32);
+      this.pitchBuf = this.pitch * this.bufH;
     }
 
     /* ---------------------------------- 描画 ---------------------------------- */
 
-    render(dt) {
+    render() {
       const ctx = this.ctx;
-      const W = this.W;
-      const H = this.H;
       if (!this.map || !this.player) {
         ctx.fillStyle = '#05060d';
-        ctx.fillRect(0, 0, W, H);
+        ctx.fillRect(0, 0, this.W, this.H);
         return;
       }
 
-      const shakeAmp = this.shake * this.uiScale * 9;
+      const shakeAmp = this.shake * (this.bufH / 90);
       const sx = (Math.random() - 0.5) * shakeAmp;
       const sy = (Math.random() - 0.5) * shakeAmp;
 
-      ctx.save();
-      ctx.translate(sx, sy);
-      this.renderWorld(dt);
-      ctx.restore();
-
+      // 1) 世界をオフスクリーンバッファへ描く（解像度＝時代）
+      const b = this.bctx;
+      b.save();
+      b.translate(sx, sy);
+      this.renderWorld();
+      b.restore();
       this.drawWeapon();
+
+      // 2) 時代ごとの後処理（減色・走査線）
+      this.postProcess();
+
+      // 3) 画面へ引き伸ばす
+      ctx.imageSmoothingEnabled = this.tier.smoothing;
+      ctx.drawImage(this.buf, 0, 0, this.W, this.H);
+      if (this.tier.bloom > 0) this.drawBloom();
+
+      // 4) HUD は常に高解像度で描く（読みやすさ優先）
       this.drawOverlays();
       this.drawMinimap();
       this.drawCrosshair();
     }
 
-    renderWorld(dt) {
-      const ctx = this.ctx;
-      const W = this.W;
-      const H = this.H;
+    /** 動的ライト（銃口の閃光・敵弾・強化コア）を集める。高ティアのみ使用。 */
+    collectLights() {
+      const lights = this.lights;
+      lights.length = 0;
+      if (!this.tier.lights) return lights;
       const p = this.player;
-      const horizon = Math.round(H / 2 + this.pitch);
-      const pad = 24;
+      if (p.flash > 0) lights.push({ x: p.x, y: p.y, r: 6, i: 1.5 * (p.flash / 0.09), c: [255, 220, 150] });
+      for (const b of this.projectiles) lights.push({ x: b.x, y: b.y, r: 3.4, i: 0.85, c: [196, 107, 255] });
+      for (const it of this.pickups) {
+        if (it.kind === 'core') lights.push({ x: it.x, y: it.y, r: 2.6, i: 0.5, c: [124, 232, 255] });
+      }
+      return lights;
+    }
 
-      ctx.fillStyle = this.ceilGrad;
-      ctx.fillRect(-pad, -pad, W + pad * 2, horizon + pad);
-      ctx.fillStyle = this.floorGrad;
-      ctx.fillRect(-pad, horizon, W + pad * 2, H - horizon + pad);
+    renderWorld() {
+      const ctx = this.bctx;
+      const W = this.bufW;
+      const H = this.bufH;
+      const p = this.player;
+      const horizon = Math.round(H / 2 + this.pitchBuf);
+      const pad = Math.ceil(H / 12);
 
       const dirX = Math.cos(p.angle);
       const dirY = Math.sin(p.angle);
       const planeX = -dirY * this.planeLen;
       const planeY = dirX * this.planeLen;
       const projH = this.proj * H;
-      const colW = this.colW;
+
+      // --- 床と天井 ---
+      if (this.tier.floor === 'textured') {
+        this.castFloor(horizon, dirX, dirY, planeX, planeY, projH);
+      } else if (this.tier.floor === 'gradient') {
+        ctx.fillStyle = this.ceilGrad;
+        ctx.fillRect(-pad, -pad, W + pad * 2, horizon + pad);
+        ctx.fillStyle = this.floorGrad;
+        ctx.fillRect(-pad, horizon, W + pad * 2, H - horizon + pad);
+      } else {
+        ctx.fillStyle = '#0b0e1a';
+        ctx.fillRect(-pad, -pad, W + pad * 2, horizon + pad);
+        ctx.fillStyle = '#2b3040';
+        ctx.fillRect(-pad, horizon, W + pad * 2, H - horizon + pad);
+      }
+
+      // --- 壁 ---
       const walls = this.assets.walls;
+      const colW = this.colW;
+      const lights = this.collectLights();
+      const fogSteps = Math.max(3, this.tier.shadeLevels * 2);
 
       for (let i = 0; i < this.rays; i++) {
         const cameraX = (2 * i) / this.rays - 1;
@@ -1937,6 +2637,10 @@ window.__BZ = {};
         const hit = this.castRay(p.x, p.y, rdx, rdy);
         const dist = hit.dist;
         this.zbuf[i] = dist;
+        const hx = p.x + rdx * dist;
+        const hy = p.y + rdy * dist;
+        this.hitX[i] = hx;
+        this.hitY[i] = hy;
 
         const lineH = projH / dist;
         const top = horizon - lineH / 2;
@@ -1949,25 +2653,137 @@ window.__BZ = {};
           texX = tex.width - texX - 1;
         }
 
-        const x = i * colW;
-        ctx.drawImage(tex, texX, 0, 1, tex.height, x, top, colW + 1, lineH);
+        const px = i * colW;
+        ctx.drawImage(tex, texX, 0, 1, tex.height, px, top, colW + 0.02, lineH);
 
+        // 距離による減光（低ティアほど段階が粗い＝バンディングが出る）
         let fog = dist / FOG_DISTANCE;
         if (hit.side === 1) fog += 0.16;
-        const q = Math.min(24, (fog * 24) | 0);
+        const q = Math.min(24, Math.round((Math.min(1, fog) * fogSteps) / fogSteps * 24));
         if (q > 0) {
           ctx.fillStyle = this._shades[q];
-          ctx.fillRect(x, top, colW + 1, lineH);
+          ctx.fillRect(px, top, colW + 0.02, lineH);
+        }
+
+        // 動的ライト（加算合成）
+        if (lights.length) {
+          let lr = 0;
+          let lg = 0;
+          let lb = 0;
+          for (const L of lights) {
+            const d2 = (L.x - hx) ** 2 + (L.y - hy) ** 2;
+            if (d2 > L.r * L.r) continue;
+            const a = L.i * (1 - Math.sqrt(d2) / L.r) ** 2;
+            lr += L.c[0] * a;
+            lg += L.c[1] * a;
+            lb += L.c[2] * a;
+          }
+          if (lr + lg + lb > 6) {
+            const scale = Math.min(1, Math.max(lr, lg, lb) / 255);
+            ctx.globalCompositeOperation = 'lighter';
+            ctx.fillStyle = `rgba(${Math.min(255, lr | 0)},${Math.min(255, lg | 0)},${Math.min(255, lb | 0)},${(scale * 0.55).toFixed(3)})`;
+            ctx.fillRect(px, top, colW + 0.02, lineH);
+            ctx.globalCompositeOperation = 'source-over';
+          }
+        }
+
+        // 接地影（壁と床の境目を締める）
+        if (this.tier.ao) {
+          const aoH = Math.max(1, lineH * 0.12);
+          ctx.fillStyle = 'rgba(4,6,14,0.35)';
+          ctx.fillRect(px, top + lineH - aoH, colW + 0.02, aoH);
         }
       }
 
       this.renderSprites(horizon, dirX, dirY, planeX, planeY, projH);
     }
 
+    /**
+     * 床をテクスチャで描く（フロアキャスティング）。高ティアのみ。
+     *
+     * 画面の読み戻し（getImageData）は重いので行わず、手前の帯だけを
+     * 専用バッファに毎フレーム書き切って putImageData する。
+     * 解像度が高いときは縦横 2px 単位で塗って計算量を抑える。
+     */
+    castFloor(horizon, dirX, dirY, planeX, planeY, projH) {
+      const ctx = this.bctx;
+      const W = this.bufW;
+      const H = this.bufH;
+
+      // 遠景はグラデーションで済ませる
+      ctx.fillStyle = this.ceilGrad;
+      ctx.fillRect(0, 0, W, Math.max(0, horizon));
+      ctx.fillStyle = this.floorGrad;
+      ctx.fillRect(0, Math.max(0, horizon), W, H - Math.max(0, horizon));
+
+      const tex = this.floorTex;
+      if (!tex) return;
+
+      const maxDist = 7.5;
+      const bandTop = Math.max(horizon + 1, Math.ceil(horizon + (0.5 * projH) / maxDist));
+      const bandH = H - bandTop;
+      if (bandH <= 0) return;
+
+      if (!this.floorBand || this.floorBand.width !== W || this.floorBand.height !== bandH) {
+        this.floorBand = ctx.createImageData(W, bandH);
+        const d = this.floorBand.data;
+        for (let i = 3; i < d.length; i += 4) d[i] = 255; // 不透明で固定
+      }
+      const out = this.floorBand.data;
+
+      const rayX0 = dirX - planeX;
+      const rayY0 = dirY - planeY;
+      const rayX1 = dirX + planeX;
+      const rayY1 = dirY + planeY;
+      const hstep = W > 620 ? 2 : 1;
+      const vstep = W > 620 ? 2 : 1;
+
+      const texData = tex.floor.data;
+      const tsize = tex.floor.size;
+      const px = this.player.x;
+      const py = this.player.y;
+
+      for (let y = 0; y < bandH; y += vstep) {
+        const screenY = bandTop + y;
+        const rowDistance = (0.5 * projH) / (screenY - horizon);
+        const stepX = (rowDistance * (rayX1 - rayX0)) / W;
+        const stepY = (rowDistance * (rayY1 - rayY0)) / W;
+        let fx = px + rowDistance * rayX0;
+        let fy = py + rowDistance * rayY0;
+
+        const light = 1 - Math.min(1, rowDistance / FOG_DISTANCE) * 0.85;
+        const rowOff = y * W * 4;
+
+        for (let x = 0; x < W; x += hstep) {
+          const tx = ((fx * tsize) | 0) & (tsize - 1);
+          const ty = ((fy * tsize) | 0) & (tsize - 1);
+          const ti = (ty * tsize + tx) * 4;
+          const r = texData[ti] * light;
+          const g = texData[ti + 1] * light;
+          const b = texData[ti + 2] * light;
+          for (let k = 0; k < hstep && x + k < W; k++) {
+            const o = rowOff + (x + k) * 4;
+            out[o] = r;
+            out[o + 1] = g;
+            out[o + 2] = b;
+          }
+          fx += stepX * hstep;
+          fy += stepY * hstep;
+        }
+
+        // 間引いた行は直前の行をコピーして埋める
+        for (let k = 1; k < vstep && y + k < bandH; k++) {
+          out.copyWithin((y + k) * W * 4, rowOff, rowOff + W * 4);
+        }
+      }
+      ctx.putImageData(this.floorBand, 0, bandTop);
+    }
+
     renderSprites(horizon, dirX, dirY, planeX, planeY, projH) {
-      const ctx = this.ctx;
+      const ctx = this.bctx;
       const p = this.player;
       const list = [];
+      const shades = this.assets.shades;
 
       for (const e of this.enemies) {
         const a = this.assets.enemies[e.type];
@@ -1982,7 +2798,7 @@ window.__BZ = {};
         });
       }
       for (const it of this.pickups) {
-        const imgs = this.assets.pickups[it.kind];
+        const imgs = this.assets.pickups[it.kind] || this.assets.pickups.ammo;
         const bobY = Math.sin(it.anim * 3) * 0.05;
         list.push({
           x: it.x, y: it.y, imgs,
@@ -2009,8 +2825,7 @@ window.__BZ = {};
         if (tY < 0.18) continue;
 
         const h = (projH * s.scale) / tY;
-        const w = h;
-        const wRays = w / colW;
+        const wRays = h / colW;
         const screenXRay = (this.rays / 2) * (1 + tX / tY);
         const startRay = screenXRay - wRays / 2;
         const top = horizon - h / 2 + (s.vWorld * projH) / tY;
@@ -2019,7 +2834,8 @@ window.__BZ = {};
         const last = Math.min(this.rays - 1, Math.floor(startRay + wRays));
         if (last < first) continue;
 
-        const img = s.imgs[Math.min(SHADE_LEVELS - 1, (Math.sqrt(s.d2) / 2.6) | 0)];
+        const fog = Math.min(1, Math.sqrt(s.d2) / FOG_DISTANCE);
+        const img = s.imgs[Math.min(shades - 1, Math.round(fog * (shades - 1)))];
         if (s.alpha < 1) ctx.globalAlpha = s.alpha;
 
         // Z バッファで隠れていない連続区間だけをまとめて描く
@@ -2042,12 +2858,11 @@ window.__BZ = {};
     }
 
     drawWeapon() {
-      const ctx = this.ctx;
+      const ctx = this.bctx;
       const p = this.player;
-      const weapon = this.assets.weapon;
-      const H = this.H;
-      const W = this.W;
-      // 画面の縦横どちらにも収まるサイズにする（縦持ちで巨大化しないように）
+      const weapon = this.assets.weapons[Math.min(this.assets.weapons.length - 1, p.weapon.level - 1)];
+      const H = this.bufH;
+      const W = this.bufW;
       const scale = Math.min(W * 0.62, H * 0.65) / weapon.width;
       const w = weapon.width * scale;
       const h = weapon.height * scale;
@@ -2059,7 +2874,7 @@ window.__BZ = {};
       if (p.flash > 0) {
         const fx = x + weapon.width * 0.47 * scale;
         const fy = y + weapon.height * 0.04 * scale;
-        const r = H * 0.16;
+        const r = H * (0.16 + p.weapon.level * 0.012);
         const grad = ctx.createRadialGradient(fx, fy, 1, fx, fy, r);
         grad.addColorStop(0, 'rgba(255,244,200,0.95)');
         grad.addColorStop(0.4, 'rgba(255,180,80,0.5)');
@@ -2070,6 +2885,63 @@ window.__BZ = {};
         ctx.fill();
       }
       ctx.drawImage(weapon, x, y, w, h);
+
+      if (p.flash > 0) {
+        ctx.fillStyle = `rgba(255,226,170,${p.flash * 0.32})`;
+        ctx.fillRect(0, 0, W, H);
+      }
+    }
+
+    /** 減色・走査線など「時代」を作る後処理。低ティアほど強くかかる。 */
+    postProcess() {
+      const ctx = this.bctx;
+      const W = this.bufW;
+      const H = this.bufH;
+      const tier = this.tier;
+
+      if (tier.palette || tier.colorLevels) {
+        const img = ctx.getImageData(0, 0, W, H);
+        const d = img.data;
+        if (tier.palette) {
+          const lut = this.paletteLut;
+          for (let i = 0; i < d.length; i += 4) {
+            const idx = (((d[i] >> 3) << 10) | ((d[i + 1] >> 3) << 5) | (d[i + 2] >> 3)) * 3;
+            d[i] = lut[idx];
+            d[i + 1] = lut[idx + 1];
+            d[i + 2] = lut[idx + 2];
+          }
+        } else {
+          const lut = this.levelLut;
+          for (let i = 0; i < d.length; i += 4) {
+            d[i] = lut[d[i]];
+            d[i + 1] = lut[d[i + 1]];
+            d[i + 2] = lut[d[i + 2]];
+          }
+        }
+        ctx.putImageData(img, 0, 0);
+      }
+
+      if (tier.scanline > 0) {
+        ctx.fillStyle = `rgba(0,0,0,${tier.scanline * 0.5})`;
+        for (let y = 1; y < H; y += 2) ctx.fillRect(0, y, W, 1);
+      }
+    }
+
+    /** 明るい部分をにじませる簡易ブルーム（高ティアのみ）。 */
+    drawBloom() {
+      const ctx = this.ctx;
+      const bc = this.bloomBuf.getContext('2d');
+      bc.clearRect(0, 0, this.bloomBuf.width, this.bloomBuf.height);
+      bc.filter = 'brightness(1.08) contrast(3.4) saturate(1.15)';
+      bc.drawImage(this.buf, 0, 0, this.bloomBuf.width, this.bloomBuf.height);
+      bc.filter = 'none';
+
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.globalAlpha = this.tier.bloom;
+      ctx.imageSmoothingEnabled = true;
+      ctx.drawImage(this.bloomBuf, 0, 0, this.W, this.H);
+      ctx.restore();
     }
 
     drawOverlays() {
@@ -2078,10 +2950,6 @@ window.__BZ = {};
       const W = this.W;
       const H = this.H;
 
-      if (p.flash > 0) {
-        ctx.fillStyle = `rgba(255,226,170,${p.flash * 0.6})`;
-        ctx.fillRect(0, 0, W, H);
-      }
       const lowHp = p.hp / p.maxHp < 0.35 ? 1 - p.hp / p.maxHp / 0.35 : 0;
       const vig = Math.max(p.hurtT / 0.5, lowHp * 0.55);
       if (vig > 0.01) {
@@ -2149,7 +3017,7 @@ window.__BZ = {};
       }
 
       for (const it of this.pickups) {
-        ctx.fillStyle = it.kind === 'ammo' ? '#ffd447' : '#ff5f7a';
+        ctx.fillStyle = it.kind === 'ammo' ? '#ffd447' : it.kind === 'core' ? '#7ce8ff' : '#ff5f7a';
         ctx.fillRect(cx + (it.x - p.x) * cell - cell * 0.2, cy + (it.y - p.y) * cell - cell * 0.2, cell * 0.45, cell * 0.45);
       }
       for (const e of this.enemies) {
@@ -2198,6 +3066,7 @@ window.__BZ = {};
     let usingPointerLock = false;
 
     const game = new Game(canvas, { onEvent });
+    if (window.__BZ) window.__BZ.game = game; // デバッグ・動作確認用
 
     function setPhase(next) {
       phase = next;
@@ -2206,16 +3075,33 @@ window.__BZ = {};
       el('touch').hidden = next !== 'playing' || !coarse;
     }
 
+    function showBanner(title, sub) {
+      const b = el('banner');
+      b.innerHTML = '';
+      b.appendChild(document.createTextNode(title));
+      if (sub) {
+        const small = document.createElement('small');
+        small.textContent = sub;
+        b.appendChild(small);
+      }
+      b.hidden = false;
+      b.style.animation = 'none';
+      void b.offsetWidth; // アニメーションを再生し直す
+      b.style.animation = '';
+      clearTimeout(showBanner._t);
+      showBanner._t = setTimeout(() => { b.hidden = true; }, 2200);
+    }
+
     function onEvent(type, payload) {
       if (type === 'wave') {
+        showBanner('WAVE ' + payload.wave);
+      } else if (type === 'tier') {
+        showBanner(payload.label, '映像・音響が進化：' + payload.note);
+      } else if (type === 'weaponup') {
+        showBanner('WEAPON Lv.' + payload.level, payload.name + '／' + payload.perk);
+      } else if (type === 'gameover_LEGACY') {
         const b = el('banner');
-        b.textContent = 'WAVE ' + payload.wave;
         b.hidden = false;
-        b.style.animation = 'none';
-        void b.offsetWidth; // アニメーションを再生し直す
-        b.style.animation = '';
-        clearTimeout(onEvent._t);
-        onEvent._t = setTimeout(() => { b.hidden = true; }, 1900);
       } else if (type === 'gameover') {
         if (payload.score > best) { best = payload.score; writeBest(best); el('over-note').textContent = 'ハイスコア更新！'; }
         else el('over-note').textContent = 'ハイスコア ' + best;
@@ -2241,6 +3127,10 @@ window.__BZ = {};
       el('c-enemies').textContent = '敵 ' + h.enemies;
       el('ammo').textContent = h.ammo;
       el('ammo-box').classList.toggle('empty', h.ammo === 0);
+      el('c-tier').textContent = h.tier;
+      el('w-name').textContent = h.weapon;
+      el('w-level').textContent = 'Lv.' + h.weaponLevel;
+      el('w-fill').style.width = ((h.weaponMax ? 1 : h.weaponRatio || 0) * 100) + '%';
     }, 100);
 
     /* ------------------------------- キーボード ------------------------------- */
