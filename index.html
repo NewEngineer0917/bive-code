@@ -1321,6 +1321,214 @@ window.__BZ = {};
   Object.assign(__BZ, { MAP_SIZE, createRng, generateMap });
 })();
 
+/* ---------- src/game/cityGen.js ---------- */
+(function () {
+  /**
+   * 街（ステージ）の自動生成。
+   *
+   * 迷路ではなく「碁盤の目の街区」を作る:
+   *   ・幅の広い道路が縦横に走り、その間がビルの街区になる
+   *   ・街区の外周は歩道、内部はビル（高さがバラバラ）や路地、広場
+   *   ・ウェーブが進むごとに再生成され、街並みが毎回変わる
+   *
+   * tiles: 0 = 通行可、1以上 = 建物（値-1 がマテリアル番号）
+   * kind:  0 = 車道、1 = 歩道、2 = 広場（通行可タイルの床の種類）
+   */
+
+  const CITY_SIZE = 52;
+
+  /* マテリアル番号（materials.js の並びと一致させる） */
+  const MAT = {
+    FACADE_CONCRETE: 0,
+    FACADE_GLASS: 1,
+    FACADE_BRICK: 2,
+    ROAD: 3,
+    SIDEWALK: 4,
+    ROOF: 5,
+    SHUTTER: 6,
+    CONCRETE: 7,
+  };
+
+  const FACADES = [MAT.FACADE_CONCRETE, MAT.FACADE_GLASS, MAT.FACADE_BRICK];
+
+  function generateCity(rnd = Math.random, wave = 1) {
+    const size = CITY_SIZE;
+    const tiles = new Uint8Array(size * size);
+    const heights = new Float32Array(size * size);
+    const kind = new Uint8Array(size * size);
+    const at = (x, y) => y * size + x;
+
+    // --- 通りの位置を決める（幅3〜4の道路） ---
+    const streets = (limit) => {
+      const list = [];
+      let pos = 2 + ((rnd() * 2) | 0);
+      while (pos < limit - 6) {
+        const width = rnd() < 0.35 ? 4 : 3;
+        list.push({ pos, width });
+        pos += width + 7 + ((rnd() * 5) | 0);
+      }
+      return list;
+    };
+    const vStreets = streets(size);
+    const hStreets = streets(size);
+
+    const isStreet = (list, v) => list.some((s) => v >= s.pos && v < s.pos + s.width);
+
+    // --- 街区を埋める ---
+    const center = size / 2;
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        const onStreet = isStreet(vStreets, x) || isStreet(hStreets, y);
+        if (onStreet) {
+          kind[at(x, y)] = 0; // 車道
+          continue;
+        }
+        // 道路に隣接するタイルは歩道にする
+        const nearStreet = isStreet(vStreets, x - 1) || isStreet(vStreets, x + 1)
+          || isStreet(hStreets, y - 1) || isStreet(hStreets, y + 1);
+        if (nearStreet) {
+          kind[at(x, y)] = 1; // 歩道
+          continue;
+        }
+        tiles[at(x, y)] = 1; // ひとまず建物候補
+      }
+    }
+
+    // --- 街区ごとにビル・路地・広場へ振り分ける ---
+    const visited = new Uint8Array(size * size);
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        if (!tiles[at(x, y)] || visited[at(x, y)]) continue;
+
+        // 連結した建物候補（＝ひとつの街区）を取り出す
+        const cells = [];
+        const stack = [[x, y]];
+        visited[at(x, y)] = 1;
+        while (stack.length) {
+          const [cx, cy] = stack.pop();
+          cells.push([cx, cy]);
+          for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+            const nx = cx + dx;
+            const ny = cy + dy;
+            if (nx < 0 || ny < 0 || nx >= size || ny >= size) continue;
+            if (!tiles[at(nx, ny)] || visited[at(nx, ny)]) continue;
+            visited[at(nx, ny)] = 1;
+            stack.push([nx, ny]);
+          }
+        }
+
+        const roll = rnd();
+        if (roll < 0.16 || cells.length <= 2) {
+          // 広場・駐車場（開けた空間）
+          for (const [cx, cy] of cells) {
+            tiles[at(cx, cy)] = 0;
+            kind[at(cx, cy)] = 2;
+          }
+          continue;
+        }
+
+        // 街区の範囲
+        let minX = size;
+        let maxX = 0;
+        let minY = size;
+        let maxY = 0;
+        for (const [cx, cy] of cells) {
+          minX = Math.min(minX, cx); maxX = Math.max(maxX, cx);
+          minY = Math.min(minY, cy); maxY = Math.max(maxY, cy);
+        }
+
+        // 大きい街区は路地で分割する
+        const alleyX = maxX - minX >= 5 && rnd() < 0.65
+          ? minX + 2 + ((rnd() * (maxX - minX - 3)) | 0) : -1;
+        const alleyY = maxY - minY >= 5 && rnd() < 0.5
+          ? minY + 2 + ((rnd() * (maxY - minY - 3)) | 0) : -1;
+
+        // 街区内をいくつかのビルに分け、それぞれ高さと外装を決める
+        const facade = FACADES[(rnd() * FACADES.length) | 0];
+        const partH = new Map();
+        for (const [cx, cy] of cells) {
+          if (cx === alleyX || cy === alleyY) {
+            tiles[at(cx, cy)] = 0;
+            kind[at(cx, cy)] = 2; // 路地
+            continue;
+          }
+          const partX = alleyX >= 0 && cx > alleyX ? 1 : 0;
+          const partY = alleyY >= 0 && cy > alleyY ? 1 : 0;
+          const key = partX + partY * 2;
+          if (!partH.has(key)) {
+            // 中心に近いほど高層になる
+            const d = Math.hypot(cx - center, cy - center) / center;
+            const tall = Math.max(0, 1 - d) ** 1.4;
+            const base = 4 + tall * (10 + wave * 0.6);
+            partH.set(key, base + rnd() * 4);
+          }
+          tiles[at(cx, cy)] = facade + 1;
+          heights[at(cx, cy)] = partH.get(key);
+        }
+      }
+    }
+
+    // --- 外周は必ず高い壁（街の外へ出られないように） ---
+    for (let i = 0; i < size; i++) {
+      for (const [x, y] of [[i, 0], [i, size - 1], [0, i], [size - 1, i]]) {
+        tiles[at(x, y)] = MAT.CONCRETE + 1;
+        heights[at(x, y)] = 16;
+      }
+    }
+
+    // --- 通行可能なマスの一覧と、到達できない場所の除去 ---
+    const reach = new Uint8Array(size * size);
+    let start = -1;
+    for (let y = 2; y < size - 2 && start < 0; y++) {
+      for (let x = 2; x < size - 2; x++) if (!tiles[at(x, y)]) { start = at(x, y); break; }
+    }
+    const queue = [start];
+    reach[start] = 1;
+    for (let h = 0; h < queue.length; h++) {
+      const cur = queue[h];
+      const cx = cur % size;
+      const cy = (cur / size) | 0;
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const nx = cx + dx;
+        const ny = cy + dy;
+        if (nx < 0 || ny < 0 || nx >= size || ny >= size) continue;
+        const ni = at(nx, ny);
+        if (tiles[ni] || reach[ni]) continue;
+        reach[ni] = 1;
+        queue.push(ni);
+      }
+    }
+
+    const open = [];
+    for (let y = 1; y < size - 1; y++) {
+      for (let x = 1; x < size - 1; x++) {
+        const i = at(x, y);
+        if (tiles[i]) continue;
+        if (!reach[i]) {           // 孤立空間は建物で埋める
+          tiles[i] = MAT.CONCRETE + 1;
+          heights[i] = 6;
+          continue;
+        }
+        open.push([x + 0.5, y + 0.5]);
+      }
+    }
+
+    // 開始地点は街の中心に近い車道
+    let spawn = open[0];
+    let bestScore = Infinity;
+    for (const cell of open) {
+      const x = cell[0] | 0;
+      const y = cell[1] | 0;
+      if (kind[at(x, y)] !== 0) continue;
+      const d = Math.hypot(x - center, y - center);
+      if (d < bestScore) { bestScore = d; spawn = cell; }
+    }
+
+    return { size, tiles, heights, kind, open, spawn };
+  }
+  Object.assign(__BZ, { CITY_SIZE, MAT, generateCity });
+})();
+
 /* ---------- src/game/audio.js ---------- */
 (function () {
   /**
@@ -1853,26 +2061,25 @@ window.__BZ = {};
 /* ---------- src/game/materials.js ---------- */
 (function () {
   /**
-   * 3D 描画用のマテリアルを手続き生成する。
+   * 街のマテリアルを手続き生成する。
    *
    * 各マテリアルは「色（アルベド）」と「高さ」を描き、高さから法線マップを作る。
-   * 法線マップのアルファには粗さ（ラフネス）を入れて 1 枚にまとめている。
-   * 画像ファイルを持たずに、レンガの目地の凹み・金属の傷・コンクリートの
-   * ざらつきといった質感を表現するのが狙い。
+   * アルベドのアルファは「自発光マスク」として使い、夜のビルの窓を光らせる。
+   * 法線マップのアルファには粗さ（ラフネス）を入れている。
    */
 
   const MAT_SIZE = 256;
 
   const MATERIALS = {
-    BRICK: 0,
-    PANEL: 1,
-    CONCRETE: 2,
-    HAZARD: 3,
-    FLOOR: 4,
-    CEILING: 5,
+    FACADE_CONCRETE: 0,
+    FACADE_GLASS: 1,
+    FACADE_BRICK: 2,
+    ROAD: 3,
+    SIDEWALK: 4,
+    ROOF: 5,
+    SHUTTER: 6,
+    CONCRETE: 7,
   };
-
-  const TAU = Math.PI * 2;
 
   function canvasOf(w, h) {
     const c = document.createElement('canvas');
@@ -1891,7 +2098,6 @@ window.__BZ = {};
     };
   }
 
-  /** 値ノイズ（滑らかなムラ）。汚れやざらつきの土台に使う。 */
   function valueNoise(size, cells, rnd) {
     const grid = new Float32Array((cells + 1) * (cells + 1));
     for (let i = 0; i < grid.length; i++) grid[i] = rnd();
@@ -1916,7 +2122,6 @@ window.__BZ = {};
     return out;
   }
 
-  /** 複数周波数のノイズを重ねる（フラクタルノイズ）。 */
   function fbm(size, rnd, octaves = 4, base = 4) {
     const out = new Float32Array(size * size);
     let amp = 1;
@@ -1937,21 +2142,19 @@ window.__BZ = {};
     const at = (x, y) => height[((y + size) % size) * size + ((x + size) % size)];
     for (let y = 0; y < size; y++) {
       for (let x = 0; x < size; x++) {
-        // Sobel フィルタで傾きを求める
         const dx = (at(x + 1, y - 1) + 2 * at(x + 1, y) + at(x + 1, y + 1))
           - (at(x - 1, y - 1) + 2 * at(x - 1, y) + at(x - 1, y + 1));
         const dy = (at(x - 1, y + 1) + 2 * at(x, y + 1) + at(x + 1, y + 1))
           - (at(x - 1, y - 1) + 2 * at(x, y - 1) + at(x + 1, y - 1));
         let nx = -dx * strength;
         let ny = -dy * strength;
-        const nz = 1;
-        const len = Math.hypot(nx, ny, nz) || 1;
+        const len = Math.hypot(nx, ny, 1) || 1;
         nx /= len;
         ny /= len;
         const i = (y * size + x) * 4;
         data[i] = (nx * 0.5 + 0.5) * 255;
         data[i + 1] = (ny * 0.5 + 0.5) * 255;
-        data[i + 2] = (nz / len * 0.5 + 0.5) * 255;
+        data[i + 2] = (1 / len * 0.5 + 0.5) * 255;
         const h = height[y * size + x];
         data[i + 3] = Math.max(0, Math.min(255, (roughness + (h - 0.5) * roughVariation) * 255));
       }
@@ -1959,223 +2162,117 @@ window.__BZ = {};
     return new ImageData(data, size, size);
   }
 
-  function toImageData(canvas) {
-    return canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height);
+  /** キャンバスから ImageData を取り出し、アルファ（自発光マスク）を差し替える。 */
+  function toImageData(canvas, emissiveCanvas) {
+    const size = canvas.width;
+    const img = canvas.getContext('2d').getImageData(0, 0, size, size);
+    const mask = emissiveCanvas
+      ? emissiveCanvas.getContext('2d').getImageData(0, 0, size, size)
+      : null;
+    const d = img.data;
+    for (let i = 0; i < d.length; i += 4) {
+      // マスクの明るさを自発光量としてアルファに入れる（無い場合は 0）
+      d[i + 3] = mask ? mask.data[i] : 0;
+    }
+    return img;
   }
 
-  /* ------------------------------- 各マテリアル ------------------------------- */
+  /* ------------------------------ ビルの外壁 ------------------------------ */
 
-  function brick(size, rnd) {
+  /**
+   * 窓の並んだビル外壁を作る。
+   * cols × rows の窓を描き、一部だけ明かりが点いている状態にする。
+   */
+  function facade(size, rnd, opts) {
     const c = canvasOf(size, size);
     const g = c.getContext('2d');
+    const emissive = canvasOf(size, size);
+    const eg = emissive.getContext('2d');
     const height = new Float32Array(size * size);
     const grime = fbm(size, rnd, 4, 3);
 
-    g.fillStyle = '#3a3330';
+    eg.fillStyle = '#000';
+    eg.fillRect(0, 0, size, size);
+
+    // 壁面のベース
+    g.fillStyle = opts.wall;
     g.fillRect(0, 0, size, size);
-
-    const rows = 8;
-    const bh = size / rows;
-    const bw = size / 4;
-    const mortar = 5;
-
-    for (let row = 0; row < rows; row++) {
-      const offset = (row % 2) * (bw / 2);
-      for (let col = -1; col < 5; col++) {
-        const x = col * bw + offset;
-        const y = row * bh;
-        const shade = 0.78 + rnd() * 0.42;
-        const r = Math.round(150 * shade);
-        const gg = Math.round(72 * shade);
-        const b = Math.round(58 * shade);
-        g.fillStyle = `rgb(${r},${gg},${b})`;
-        g.fillRect(x + mortar / 2, y + mortar / 2, bw - mortar, bh - mortar);
-        // レンガ上端のハイライト
-        g.fillStyle = `rgba(255,225,205,0.10)`;
-        g.fillRect(x + mortar / 2, y + mortar / 2, bw - mortar, 2);
+    if (opts.bands) {
+      g.fillStyle = opts.band;
+      for (let r = 0; r < opts.rows; r++) {
+        const y = (r / opts.rows) * size;
+        g.fillRect(0, y + size / opts.rows - 10, size, 10);   // 階の帯（スラブ）
       }
     }
 
-    // 汚れとムラを重ねる
-    const img = toImageData(c);
+    const cw = size / opts.cols;
+    const ch = size / opts.rows;
+    for (let r = 0; r < opts.rows; r++) {
+      for (let col = 0; col < opts.cols; col++) {
+        const x = col * cw + cw * opts.inset;
+        const y = r * ch + ch * opts.inset;
+        const w = cw * (1 - opts.inset * 2);
+        const h = ch * (1 - opts.inset * 2) * opts.aspect;
+
+        const lit = rnd() < opts.litRatio;
+        if (lit) {
+          const warm = rnd() < 0.7;
+          const cr = warm ? 255 : 190;
+          const cg = warm ? 224 : 226;
+          const cb = warm ? 168 : 255;
+          g.fillStyle = `rgb(${cr},${cg},${cb})`;
+          g.fillRect(x, y, w, h);
+          // 明かりの強さにばらつきを付ける
+          const level = 150 + ((rnd() * 105) | 0);
+          eg.fillStyle = `rgb(${level},${level},${level})`;
+          eg.fillRect(x, y, w, h);
+        } else {
+          g.fillStyle = opts.glass;
+          g.fillRect(x, y, w, h);
+          // 消えている窓にも空の映り込みを少し
+          g.fillStyle = 'rgba(120,150,190,0.18)';
+          g.fillRect(x, y, w, h * 0.35);
+        }
+        // 窓枠
+        g.strokeStyle = opts.frame;
+        g.lineWidth = 2;
+        g.strokeRect(x, y, w, h);
+
+        for (let yy = Math.floor(y); yy < y + h; yy++) {
+          for (let xx = Math.floor(x); xx < x + w; xx++) {
+            if (xx < 0 || yy < 0 || xx >= size || yy >= size) continue;
+            height[yy * size + xx] = 0.25; // 窓は少し奥まっている
+          }
+        }
+      }
+    }
+
+    const img = toImageData(c, emissive);
     const d = img.data;
     for (let y = 0; y < size; y++) {
       for (let x = 0; x < size; x++) {
         const i = (y * size + x) * 4;
         const n = grime[y * size + x];
-        const dirt = 0.72 + n * 0.5;
-        d[i] *= dirt;
-        d[i + 1] *= dirt * 0.98;
-        d[i + 2] *= dirt * 0.95;
-        // 高さ：目地は凹み、レンガ面はわずかに粗い
-        const inMortar = d[i] < 70 && d[i + 1] < 70;
-        height[y * size + x] = (inMortar ? 0.18 : 0.85) + n * 0.12;
+        const dirt = 0.82 + n * 0.3;
+        // 窓（自発光あり）は汚さない
+        if (d[i + 3] < 30) {
+          d[i] *= dirt;
+          d[i + 1] *= dirt;
+          d[i + 2] *= dirt;
+          if (!height[y * size + x]) height[y * size + x] = 0.72 + n * 0.2;
+        }
       }
     }
-    g.putImageData(img, 0, 0);
-    return { albedo: img, normal: normalFromHeight(height, size, 2.6, 0.82, 0.18) };
+    return { albedo: img, normal: normalFromHeight(height, size, opts.relief, opts.rough, 0.15) };
   }
 
-  function panel(size, rnd) {
+  /* -------------------------------- 路面など -------------------------------- */
+
+  function road(size, rnd) {
     const c = canvasOf(size, size);
     const g = c.getContext('2d');
-    const height = new Float32Array(size * size);
-    const wear = fbm(size, rnd, 5, 5);
-
-    g.fillStyle = '#20283c';
-    g.fillRect(0, 0, size, size);
-
-    // 大きな金属パネル
-    const pad = 10;
-    for (let i = 0; i < 2; i++) {
-      const y = i * (size / 2);
-      const grad = g.createLinearGradient(0, y, 0, y + size / 2);
-      grad.addColorStop(0, '#4a5878');
-      grad.addColorStop(0.5, '#35415c');
-      grad.addColorStop(1, '#2a3348');
-      g.fillStyle = grad;
-      g.fillRect(pad, y + pad, size - pad * 2, size / 2 - pad * 2);
-    }
-
-    // リベット
-    for (const [x, y] of [[20, 20], [size - 20, 20], [20, size - 20], [size - 20, size - 20], [size / 2, 20], [size / 2, size - 20]]) {
-      const rg = g.createRadialGradient(x - 2, y - 2, 1, x, y, 7);
-      rg.addColorStop(0, '#9fb0cc');
-      rg.addColorStop(1, '#39435c');
-      g.fillStyle = rg;
-      g.beginPath();
-      g.arc(x, y, 6, 0, TAU);
-      g.fill();
-    }
-
-    // 発光ライン
-    g.fillStyle = '#4be0c0';
-    g.fillRect(pad + 8, size / 2 - 5, size - pad * 2 - 16, 4);
-
-    // 傷
-    g.strokeStyle = 'rgba(180,200,230,0.16)';
-    for (let i = 0; i < 26; i++) {
-      g.lineWidth = rnd() * 1.6;
-      const x = rnd() * size;
-      const y = rnd() * size;
-      g.beginPath();
-      g.moveTo(x, y);
-      g.lineTo(x + (rnd() - 0.5) * 60, y + (rnd() - 0.5) * 20);
-      g.stroke();
-    }
-
-    const img = toImageData(c);
-    const d = img.data;
-    for (let y = 0; y < size; y++) {
-      for (let x = 0; x < size; x++) {
-        const i = (y * size + x) * 4;
-        const n = wear[y * size + x];
-        const k = 0.85 + n * 0.3;
-        d[i] *= k;
-        d[i + 1] *= k;
-        d[i + 2] *= k;
-        const edge = x < pad || x > size - pad || y % (size / 2) < pad || y % (size / 2) > size / 2 - pad;
-        height[y * size + x] = (edge ? 0.25 : 0.8) + n * 0.1;
-      }
-    }
-    g.putImageData(img, 0, 0);
-    // 金属なので全体につるっとした反射（粗さ低め）
-    return { albedo: img, normal: normalFromHeight(height, size, 2.2, 0.42, 0.22) };
-  }
-
-  function concrete(size, rnd) {
-    const c = canvasOf(size, size);
-    const g = c.getContext('2d');
-    const grain = fbm(size, rnd, 5, 8);
-    const stains = fbm(size, rnd, 3, 2);
-    const height = new Float32Array(size * size);
-
-    const img = g.createImageData(size, size);
-    const d = img.data;
-    for (let y = 0; y < size; y++) {
-      for (let x = 0; x < size; x++) {
-        const i = (y * size + x) * 4;
-        const n = grain[y * size + x];
-        const s = stains[y * size + x];
-        const base = 108 + n * 60 - s * 34;
-        d[i] = base * 1.0;
-        d[i + 1] = base * 1.02;
-        d[i + 2] = base * 1.08;
-        d[i + 3] = 255;
-        height[y * size + x] = 0.5 + (n - 0.5) * 0.7;
-      }
-    }
-    g.putImageData(img, 0, 0);
-
-    // ひび割れ
-    g.strokeStyle = 'rgba(30,32,40,0.55)';
-    for (let i = 0; i < 5; i++) {
-      let x = rnd() * size;
-      let y = rnd() * size;
-      g.lineWidth = 1 + rnd() * 1.5;
-      g.beginPath();
-      g.moveTo(x, y);
-      for (let k = 0; k < 14; k++) {
-        x += (rnd() - 0.5) * 34;
-        y += (rnd() - 0.5) * 34;
-        g.lineTo(x, y);
-      }
-      g.stroke();
-    }
-
-    const out = toImageData(c);
-    return { albedo: out, normal: normalFromHeight(height, size, 1.8, 0.9, 0.12) };
-  }
-
-  function hazard(size, rnd) {
-    const c = canvasOf(size, size);
-    const g = c.getContext('2d');
-    const height = new Float32Array(size * size);
-    const wear = fbm(size, rnd, 4, 6);
-
-    g.fillStyle = '#1b1d26';
-    g.fillRect(0, 0, size, size);
-    g.save();
-    g.beginPath();
-    g.rect(0, 0, size, size);
-    g.clip();
-    g.strokeStyle = '#d6ad2e';
-    g.lineWidth = 26;
-    for (let i = -size; i < size * 2; i += 64) {
-      g.beginPath();
-      g.moveTo(i, -10);
-      g.lineTo(i + size, size + 10);
-      g.stroke();
-    }
-    g.restore();
-
-    g.fillStyle = '#141720';
-    g.fillRect(0, size * 0.42, size, size * 0.16);
-    g.fillStyle = '#4be0c0';
-    g.fillRect(6, size * 0.47, size - 12, size * 0.05);
-
-    const img = toImageData(c);
-    const d = img.data;
-    for (let y = 0; y < size; y++) {
-      for (let x = 0; x < size; x++) {
-        const i = (y * size + x) * 4;
-        const n = wear[y * size + x];
-        const k = 0.7 + n * 0.5;
-        d[i] *= k;
-        d[i + 1] *= k;
-        d[i + 2] *= k;
-        height[y * size + x] = 0.5 + (n - 0.5) * 0.5;
-      }
-    }
-    g.putImageData(img, 0, 0);
-    return { albedo: img, normal: normalFromHeight(height, size, 1.6, 0.5, 0.3) };
-  }
-
-  function floorMat(size, rnd) {
-    const c = canvasOf(size, size);
-    const g = c.getContext('2d');
-    const grain = fbm(size, rnd, 5, 10);
-    const patch = fbm(size, rnd, 3, 3);
+    const grain = fbm(size, rnd, 5, 9);
+    const patch = fbm(size, rnd, 3, 2);
     const height = new Float32Array(size * size);
 
     const img = g.createImageData(size, size);
@@ -2185,66 +2282,169 @@ window.__BZ = {};
         const i = (y * size + x) * 4;
         const n = grain[y * size + x];
         const p = patch[y * size + x];
-        const base = 58 + n * 46 + p * 16;
+        const base = 36 + n * 28 + p * 10;
         d[i] = base;
-        d[i + 1] = base * 1.03;
-        d[i + 2] = base * 1.12;
+        d[i + 1] = base * 1.02;
+        d[i + 2] = base * 1.08;
         d[i + 3] = 255;
-        height[y * size + x] = 0.5 + (n - 0.5) * 0.9;
+        height[y * size + x] = 0.5 + (n - 0.5) * 0.8;
       }
     }
     g.putImageData(img, 0, 0);
 
-    // 目地（タイルの継ぎ目）
-    g.strokeStyle = 'rgba(16,18,26,0.75)';
-    g.lineWidth = 3;
-    g.beginPath();
-    g.moveTo(0, size / 2);
-    g.lineTo(size, size / 2);
-    g.moveTo(size / 2, 0);
-    g.lineTo(size / 2, size);
-    g.stroke();
-    for (let y = 0; y < size; y++) {
-      for (let x = 0; x < size; x++) {
-        const near = Math.abs(x - size / 2) < 2 || Math.abs(y - size / 2) < 2;
-        if (near) height[y * size + x] = 0.15;
+    // 白線（破線）とひび割れ
+    g.fillStyle = 'rgba(226,226,214,0.85)';
+    g.fillRect(size / 2 - 4, 20, 8, size * 0.28);
+    g.fillRect(size / 2 - 4, size * 0.58, 8, size * 0.28);
+    g.strokeStyle = 'rgba(18,18,22,0.7)';
+    for (let i = 0; i < 4; i++) {
+      let x = rnd() * size;
+      let y = rnd() * size;
+      g.lineWidth = 1 + rnd();
+      g.beginPath();
+      g.moveTo(x, y);
+      for (let k = 0; k < 10; k++) {
+        x += (rnd() - 0.5) * 30;
+        y += (rnd() - 0.5) * 30;
+        g.lineTo(x, y);
       }
+      g.stroke();
     }
-
-    const out = toImageData(c);
-    // 濡れたような弱い反射
-    return { albedo: out, normal: normalFromHeight(height, size, 2, 0.62, 0.25) };
+    return { albedo: toImageData(c), normal: normalFromHeight(height, size, 1.6, 0.78, 0.2) };
   }
 
-  function ceilingMat(size, rnd) {
+  function sidewalk(size, rnd) {
     const c = canvasOf(size, size);
     const g = c.getContext('2d');
-    const grain = fbm(size, rnd, 4, 6);
+    const grain = fbm(size, rnd, 4, 8);
     const height = new Float32Array(size * size);
 
-    g.fillStyle = '#1a1f2c';
-    g.fillRect(0, 0, size, size);
-    g.fillStyle = '#232a3a';
-    g.fillRect(0, 0, size, 26);
-    g.fillRect(0, size - 26, size, 26);
-    g.fillStyle = '#2c3446';
-    for (let i = 0; i < 4; i++) g.fillRect(i * (size / 4) + 8, 30, size / 4 - 16, size - 60);
-
-    const img = toImageData(c);
+    const img = g.createImageData(size, size);
     const d = img.data;
     for (let y = 0; y < size; y++) {
       for (let x = 0; x < size; x++) {
         const i = (y * size + x) * 4;
         const n = grain[y * size + x];
-        const k = 0.8 + n * 0.35;
-        d[i] *= k;
-        d[i + 1] *= k;
-        d[i + 2] *= k;
-        height[y * size + x] = (y < 28 || y > size - 28 ? 0.8 : 0.4) + n * 0.15;
+        const base = 96 + n * 46;
+        d[i] = base;
+        d[i + 1] = base * 0.99;
+        d[i + 2] = base * 0.96;
+        d[i + 3] = 255;
+        height[y * size + x] = 0.62 + (n - 0.5) * 0.4;
       }
     }
     g.putImageData(img, 0, 0);
-    return { albedo: img, normal: normalFromHeight(height, size, 2, 0.8, 0.15) };
+
+    // 敷石の目地
+    g.strokeStyle = 'rgba(40,40,44,0.6)';
+    g.lineWidth = 3;
+    for (let i = 1; i < 4; i++) {
+      g.beginPath();
+      g.moveTo((i * size) / 4, 0);
+      g.lineTo((i * size) / 4, size);
+      g.moveTo(0, (i * size) / 4);
+      g.lineTo(size, (i * size) / 4);
+      g.stroke();
+      for (let k = 0; k < size; k++) {
+        const p = Math.round((i * size) / 4);
+        for (let o = -1; o <= 1; o++) {
+          height[k * size + Math.min(size - 1, Math.max(0, p + o))] = 0.2;
+          height[Math.min(size - 1, Math.max(0, p + o)) * size + k] = 0.2;
+        }
+      }
+    }
+    return { albedo: toImageData(c), normal: normalFromHeight(height, size, 2, 0.85, 0.15) };
+  }
+
+  function roof(size, rnd) {
+    const c = canvasOf(size, size);
+    const g = c.getContext('2d');
+    const grain = fbm(size, rnd, 5, 12);
+    const height = new Float32Array(size * size);
+    const img = g.createImageData(size, size);
+    const d = img.data;
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        const i = (y * size + x) * 4;
+        const n = grain[y * size + x];
+        const base = 52 + n * 40;
+        d[i] = base;
+        d[i + 1] = base;
+        d[i + 2] = base * 1.05;
+        d[i + 3] = 255;
+        height[y * size + x] = 0.5 + (n - 0.5) * 1;
+      }
+    }
+    g.putImageData(img, 0, 0);
+    g.fillStyle = '#3a3f4a';
+    g.fillRect(40, 40, 70, 50);   // 空調機
+    g.fillStyle = '#4a505c';
+    g.fillRect(46, 46, 58, 12);
+    g.fillStyle = '#2e323c';
+    g.fillRect(160, 150, 46, 46);
+    return { albedo: toImageData(c), normal: normalFromHeight(height, size, 2.2, 0.9, 0.1) };
+  }
+
+  function shutter(size, rnd) {
+    const c = canvasOf(size, size);
+    const g = c.getContext('2d');
+    const height = new Float32Array(size * size);
+    g.fillStyle = '#2b2f38';
+    g.fillRect(0, 0, size, size);
+    for (let y = 0; y < size; y += 12) {
+      g.fillStyle = y % 24 === 0 ? '#3a404c' : '#333844';
+      g.fillRect(0, y, size, 10);
+      for (let k = 0; k < size; k++) {
+        for (let o = 0; o < 10; o++) height[Math.min(size - 1, y + o) * size + k] = o < 5 ? 0.7 : 0.35;
+      }
+    }
+    const grain = fbm(size, rnd, 3, 6);
+    const img = toImageData(c);
+    const d = img.data;
+    for (let i = 0; i < d.length; i += 4) {
+      const k = 0.85 + grain[i / 4] * 0.3;
+      d[i] *= k; d[i + 1] *= k; d[i + 2] *= k;
+    }
+    return { albedo: img, normal: normalFromHeight(height, size, 2.4, 0.5, 0.2) };
+  }
+
+  function concrete(size, rnd) {
+    const c = canvasOf(size, size);
+    const g = c.getContext('2d');
+    const grain = fbm(size, rnd, 5, 8);
+    const stains = fbm(size, rnd, 3, 2);
+    const height = new Float32Array(size * size);
+    const img = g.createImageData(size, size);
+    const d = img.data;
+    for (let y = 0; y < size; y++) {
+      for (let x = 0; x < size; x++) {
+        const i = (y * size + x) * 4;
+        const n = grain[y * size + x];
+        const s = stains[y * size + x];
+        const base = 88 + n * 54 - s * 30;
+        d[i] = base;
+        d[i + 1] = base * 1.01;
+        d[i + 2] = base * 1.06;
+        d[i + 3] = 255;
+        height[y * size + x] = 0.5 + (n - 0.5) * 0.7;
+      }
+    }
+    g.putImageData(img, 0, 0);
+    g.strokeStyle = 'rgba(30,32,40,0.5)';
+    for (let i = 0; i < 4; i++) {
+      let x = rnd() * size;
+      let y = rnd() * size;
+      g.lineWidth = 1 + rnd() * 1.4;
+      g.beginPath();
+      g.moveTo(x, y);
+      for (let k = 0; k < 12; k++) {
+        x += (rnd() - 0.5) * 32;
+        y += (rnd() - 0.5) * 32;
+        g.lineTo(x, y);
+      }
+      g.stroke();
+    }
+    return { albedo: toImageData(c), normal: normalFromHeight(height, size, 1.8, 0.9, 0.12) };
   }
 
   let cache = null;
@@ -2252,14 +2452,25 @@ window.__BZ = {};
   /** 全マテリアルを生成（初回のみ）。順序は MATERIALS の値に対応する。 */
   function buildMaterials(size = MAT_SIZE) {
     if (cache) return cache;
-    const rnd = rngFrom(20260909);
+    const rnd = rngFrom(20260910);
     cache = [
-      brick(size, rnd),
-      panel(size, rnd),
+      facade(size, rnd, {
+        wall: '#3c3f47', band: '#4a4e58', bands: true, glass: '#171c26', frame: '#2a2e36',
+        cols: 4, rows: 4, inset: 0.16, aspect: 0.72, litRatio: 0.45, relief: 2.4, rough: 0.82,
+      }),
+      facade(size, rnd, {
+        wall: '#1e2836', band: '#2b3849', bands: false, glass: '#101821', frame: '#28323f',
+        cols: 5, rows: 5, inset: 0.08, aspect: 0.88, litRatio: 0.5, relief: 1.6, rough: 0.35,
+      }),
+      facade(size, rnd, {
+        wall: '#5a3a30', band: '#6b473a', bands: true, glass: '#141821', frame: '#3a2820',
+        cols: 3, rows: 4, inset: 0.2, aspect: 0.7, litRatio: 0.38, relief: 2.8, rough: 0.88,
+      }),
+      road(size, rnd),
+      sidewalk(size, rnd),
+      roof(size, rnd),
+      shutter(size, rnd),
       concrete(size, rnd),
-      hazard(size, rnd),
-      floorMat(size, rnd),
-      ceilingMat(size, rnd),
     ];
     return cache;
   }
@@ -2386,7 +2597,6 @@ window.__BZ = {};
    */
 
 
-  const WALL_H = 2.4;   // 壁の高さ（メートル相当）
   const EYE_H = 1.6;    // 視点の高さ
   const MAX_LIGHTS = 12;
 
@@ -2541,10 +2751,12 @@ window.__BZ = {};
   out vec4 fragColor;
 
   void main() {
-    vec3 albedo = texture(uAlbedo, vec3(vUv, vLayer)).rgb;
+    vec4 alb = texture(uAlbedo, vec3(vUv, vLayer));
+    vec3 albedo = alb.rgb;
+    float emissiveMask = alb.a;         // 夜のビルの窓
     vec4 nrm = texture(uNormal, vec3(vUv, vLayer));
     float rough = mix(0.85, nrm.a, uNormalMaps);
-    float metal = vLayer < 1.5 && vLayer > 0.5 ? 0.42 : 0.04; // 金属パネルだけ金属寄り
+    float metal = vLayer < 1.5 && vLayer > 0.5 ? 0.55 : 0.05;  // ガラス張りのビルだけ金属寄り // 金属パネルだけ金属寄り
 
     vec3 N = normalize(vNormal);
     if (uNormalMaps > 0.5) {
@@ -2555,6 +2767,7 @@ window.__BZ = {};
     }
 
     vec3 color = lighting(vPos, N, albedo, rough, metal, vAo);
+    color += albedo * emissiveMask * 2.2;   // 窓の明かり
     fragColor = vec4(applyFog(color, vPos), 1.0);
   }`;
 
@@ -2597,6 +2810,40 @@ window.__BZ = {};
     vec3 color = lighting(vPos, N, uColor, uRough, uMetal, 1.0) + uEmissive
       + uColor * uAmbientBoost * (0.45 + 0.55 * max(dot(N, normalize(uCamPos - vPos)), 0.0));
     fragColor = vec4(applyFog(color, vPos), 1.0);
+  }`;
+
+  const SKY_FS = `#version 300 es
+  precision highp float;
+  in vec2 vUv;
+
+  uniform vec3 uCamDir;
+  uniform float uAspect;
+  uniform float uFovScale;
+
+  out vec4 fragColor;
+
+  float hash(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453);
+  }
+
+  void main() {
+    // 画面座標から視線の高さを求め、地平線からの角度で色を決める
+    float ndcY = vUv.y * 2.0 - 1.0;
+    float elevation = clamp(uCamDir.y + ndcY * uFovScale, -1.0, 1.0);
+
+    vec3 horizon = vec3(0.16, 0.13, 0.19);   // 街明かりで少し明るい地平線
+    vec3 zenith = vec3(0.015, 0.02, 0.045);
+    vec3 col = mix(horizon, zenith, clamp(elevation * 1.6, 0.0, 1.0));
+
+    // 星（地平線より上だけ）
+    if (elevation > 0.05) {
+      vec2 cell = floor(vUv * vec2(uAspect * 220.0, 220.0));
+      float star = hash(cell);
+      if (star > 0.9975) {
+        col += vec3(0.8, 0.85, 1.0) * (star - 0.9975) * 380.0 * smoothstep(0.05, 0.4, elevation);
+      }
+    }
+    fragColor = vec4(col, 1.0);
   }`;
 
   const QUAD_VS = `#version 300 es
@@ -2840,6 +3087,7 @@ window.__BZ = {};
       this.progBright = program(gl, QUAD_VS, BRIGHT_FS);
       this.progBlur = program(gl, QUAD_VS, BLUR_FS);
       this.progComposite = program(gl, QUAD_VS, COMPOSITE_FS);
+      this.progSky = program(gl, QUAD_VS, SKY_FS);
 
       this.quadVao = this._makeQuad();
       this.box = this._makeObjectMesh(boxMesh());
@@ -2925,11 +3173,24 @@ window.__BZ = {};
       this.mapTex = gl.createTexture();
     }
 
-    /** 迷路のジオメトリと、影計算用のグリッドテクスチャを作る。 */
+    /**
+     * 街のジオメトリと、影計算用のグリッドテクスチャを作る。
+     *
+     * ・建物はタイルごとに高さが違う「柱」として立てる
+     * ・見えない面（隣も同じ高さの建物）は作らない
+     * ・車道／歩道／広場で床のマテリアルを変え、歩道には段差（縁石）を付ける
+     * ・歩道沿いに街灯を置き、実際の光源として登録する
+     */
     buildMap(map) {
       const gl = this.gl;
-      const { size, tiles } = map;
+      const { size, tiles, heights, kind } = map;
       const solid = (x, y) => (x < 0 || y < 0 || x >= size || y >= size ? 1 : (tiles[y * size + x] ? 1 : 0));
+      const heightAt = (x, y) => {
+        if (x < 0 || y < 0 || x >= size || y >= size) return 18;
+        return tiles[y * size + x] ? (heights ? heights[y * size + x] : 3) : 0;
+      };
+      const layerOf = (x, y) => Math.max(0, (tiles[y * size + x] || 1) - 1);
+      const kindAt = (x, y) => (kind && x >= 0 && y >= 0 && x < size && y < size ? kind[y * size + x] : 0);
 
       const pos = [];
       const nrm = [];
@@ -2938,176 +3199,160 @@ window.__BZ = {};
       const layer = [];
       const ao = [];
 
-      // 角に近い頂点を暗くする（簡易アンビエントオクルージョン）
-      const cornerAo = (x, z, nx, nz) => {
-        const side1 = solid(Math.floor(x + nz - 0.5), Math.floor(z + nx - 0.5));
-        const side2 = solid(Math.floor(x - nz - 0.5), Math.floor(z - nx - 0.5));
-        return 1 - 0.35 * Math.min(1, side1 + side2);
+      const pushTri = (v, n, t, u, layerIdx, aoV) => {
+        pos.push(v[0], v[1], v[2]);
+        nrm.push(n[0], n[1], n[2]);
+        tan.push(t[0], t[1], t[2]);
+        uv.push(u[0], u[1]);
+        layer.push(layerIdx);
+        ao.push(aoV);
       };
 
-      // 任意の向きの面を1枚追加する（法線 n と接線 t から巻き順を決める）
-      const pushFace = (center, n, t, halfT, halfE, layerIdx, ao, uvScale) => {
-        const e = [
-          t[1] * n[2] - t[2] * n[1],
-          t[2] * n[0] - t[0] * n[2],
-          t[0] * n[1] - t[1] * n[0],
-        ];
-        const v = (a, b) => [
-          center[0] + t[0] * halfT * a + e[0] * halfE * b,
-          center[1] + t[1] * halfT * a + e[1] * halfE * b,
-          center[2] + t[2] * halfT * a + e[2] * halfE * b,
-        ];
-        const us = uvScale || 1;
-        pushQuad(
-          [v(-1, -1), v(1, -1), v(1, 1), v(-1, 1)],
-          n, t,
-          [[0, halfE * 2 * us], [halfT * 2 * us, halfE * 2 * us], [halfT * 2 * us, 0], [0, 0]],
-          layerIdx, [ao, ao, ao, ao],
-        );
+      // 4頂点の面を追加（法線と巻き順を一致させる）
+      const pushQuad = (verts, n, t, uvs, layerIdx, aos) => {
+        for (const i of [0, 2, 1, 0, 3, 2]) pushTri(verts[i], n, t, uvs[i], layerIdx, aos[i]);
       };
 
-      // 直方体（小物）を追加する
-      const pushBox = (cx, cy, cz, sx, sy, sz, layerIdx, ao) => {
-        const hx = sx / 2;
-        const hy = sy / 2;
-        const hz = sz / 2;
-        pushFace([cx, cy, cz - hz], [0, 0, -1], [1, 0, 0], hx, hy, layerIdx, ao, 1);
-        pushFace([cx, cy, cz + hz], [0, 0, 1], [-1, 0, 0], hx, hy, layerIdx, ao, 1);
-        pushFace([cx - hx, cy, cz], [-1, 0, 0], [0, 0, -1], hz, hy, layerIdx, ao, 1);
-        pushFace([cx + hx, cy, cz], [1, 0, 0], [0, 0, 1], hz, hy, layerIdx, ao, 1);
-        pushFace([cx, cy + hy, cz], [0, 1, 0], [1, 0, 0], hx, hz, layerIdx, ao * 1.15, 1);
-        pushFace([cx, cy - hy, cz], [0, -1, 0], [1, 0, 0], hx, hz, layerIdx, ao * 0.6, 1);
-      };
+      const UV_WALL = 2.6;   // 壁テクスチャ1枚あたりのワールド幅
+      const UV_WALL_V = 3.2; // 同・高さ
+      const UV_GROUND = 2.4;
 
-      const pushQuad = (verts, normal, tangent, uvs, layerIdx, aos) => {
-        // 面の向き（法線）と巻き順を一致させる。逆だと背面カリングで消える
-        const order = [0, 2, 1, 0, 3, 2];
-        for (const i of order) {
-          pos.push(verts[i][0], verts[i][1], verts[i][2]);
-          nrm.push(normal[0], normal[1], normal[2]);
-          tan.push(tangent[0], tangent[1], tangent[2]);
-          uv.push(uvs[i][0], uvs[i][1]);
-          layer.push(layerIdx);
-          ao.push(aos[i]);
-        }
-      };
-
-      const matForTile = (t) => {
-        if (t === 1) return MATERIALS.BRICK;
-        if (t === 2) return MATERIALS.PANEL;
-        if (t === 3) return MATERIALS.CONCRETE;
-        return MATERIALS.HAZARD;
-      };
-
-      const vRepeat = WALL_H / 1.2; // 縦方向のテクスチャ繰り返し
-
+      // --- 建物 ---
       for (let y = 0; y < size; y++) {
         for (let x = 0; x < size; x++) {
-          const tile = tiles[y * size + x];
-          if (tile) {
-            const mat = matForTile(tile);
-            // 隣が空いている面だけを作る（内側は見えないので省く）
-            // 接線は「法線と上方向に対して右手系」になる向きを選ぶ。
-            // ここを間違えると面が裏返り、背面カリングで壁が透けて見える
-            const dirs = [
+          const h = heightAt(x, y);
+          if (h <= 0) continue;
+          const mat = layerOf(x, y);
+
+          const sides = [
+            { d: [0, -1], n: [0, 0, -1], t: [1, 0, 0] },
+            { d: [0, 1], n: [0, 0, 1], t: [-1, 0, 0] },
+            { d: [-1, 0], n: [-1, 0, 0], t: [0, 0, -1] },
+            { d: [1, 0], n: [1, 0, 0], t: [0, 0, 1] },
+          ];
+          for (const { d, n, t } of sides) {
+            const nh = heightAt(x + d[0], y + d[1]);
+            if (nh >= h) continue;              // 隣がもっと高ければこの面は見えない
+            const bottom = nh;                  // 低い隣家の屋上から上だけ作る
+            const cx = x + 0.5 + n[0] * 0.5;
+            const cz = y + 0.5 + n[2] * 0.5;
+            const hx = t[0] * 0.5;
+            const hz = t[2] * 0.5;
+            const v0 = [cx - hx, bottom, cz - hz];
+            const v1 = [cx + hx, bottom, cz + hz];
+            const v2 = [cx + hx, h, cz + hz];
+            const v3 = [cx - hx, h, cz - hz];
+            // UV はワールド座標基準にして、隣のタイルと窓の並びを揃える
+            const uAxis = (v) => (Math.abs(n[2]) > 0.5 ? v[0] : v[2]) / UV_WALL;
+            const vTop = 0;
+            const vBottom = (h - bottom) / UV_WALL_V;
+            const uvs = [
+              [uAxis(v0), vBottom], [uAxis(v1), vBottom], [uAxis(v1), vTop], [uAxis(v0), vTop],
+            ];
+            const groundAo = bottom === 0 ? 0.62 : 0.9;
+            pushQuad([v0, v1, v2, v3], n, t, uvs, mat, [groundAo, groundAo, 1, 1]);
+          }
+
+          // 屋上
+          pushQuad(
+            [[x, h, y], [x + 1, h, y], [x + 1, h, y + 1], [x, h, y + 1]],
+            [0, 1, 0], [1, 0, 0],
+            [[x / UV_GROUND, y / UV_GROUND], [(x + 1) / UV_GROUND, y / UV_GROUND],
+              [(x + 1) / UV_GROUND, (y + 1) / UV_GROUND], [x / UV_GROUND, (y + 1) / UV_GROUND]],
+            MATERIALS.ROOF, [1, 1, 1, 1],
+          );
+        }
+      }
+
+      // --- 地面（車道・歩道・広場） ---
+      const CURB = 0.14;
+      for (let y = 0; y < size; y++) {
+        for (let x = 0; x < size; x++) {
+          if (tiles[y * size + x]) continue;
+          const k = kindAt(x, y);
+          const mat = k === 0 ? MATERIALS.ROAD : k === 1 ? MATERIALS.SIDEWALK : MATERIALS.CONCRETE;
+          const gy = k === 0 ? 0 : CURB;      // 歩道と広場は一段高い
+
+          // 建物際は暗くする
+          const near = solid(x - 1, y) + solid(x + 1, y) + solid(x, y - 1) + solid(x, y + 1);
+          const aoV = 1 - Math.min(0.4, near * 0.12);
+          pushQuad(
+            [[x, gy, y], [x + 1, gy, y], [x + 1, gy, y + 1], [x, gy, y + 1]],
+            [0, 1, 0], [1, 0, 0],
+            [[x / UV_GROUND, y / UV_GROUND], [(x + 1) / UV_GROUND, y / UV_GROUND],
+              [(x + 1) / UV_GROUND, (y + 1) / UV_GROUND], [x / UV_GROUND, (y + 1) / UV_GROUND]],
+            mat, [aoV, aoV, aoV, aoV],
+          );
+
+          // 縁石（車道に面した側）
+          if (gy > 0) {
+            const curbSides = [
               { d: [0, -1], n: [0, 0, -1], t: [1, 0, 0] },
               { d: [0, 1], n: [0, 0, 1], t: [-1, 0, 0] },
               { d: [-1, 0], n: [-1, 0, 0], t: [0, 0, -1] },
               { d: [1, 0], n: [1, 0, 0], t: [0, 0, 1] },
             ];
-            for (const { d, n, t } of dirs) {
-              if (solid(x + d[0], y + d[1])) continue;
+            for (const { d, n, t } of curbSides) {
+              const nx = x + d[0];
+              const ny = y + d[1];
+              if (nx < 0 || ny < 0 || nx >= size || ny >= size) continue;
+              if (tiles[ny * size + nx] || kindAt(nx, ny) !== 0) continue;
               const cx = x + 0.5 + n[0] * 0.5;
               const cz = y + 0.5 + n[2] * 0.5;
               const hx = t[0] * 0.5;
               const hz = t[2] * 0.5;
-              const aoBase = 1;
-              const verts = [
-                [cx - hx, 0, cz - hz],
-                [cx + hx, 0, cz + hz],
-                [cx + hx, WALL_H, cz + hz],
-                [cx - hx, WALL_H, cz - hz],
-              ];
-              // 床に近いほど暗く（接地の陰）
-              pushQuad(verts, n, t, [[0, vRepeat], [1, vRepeat], [1, 0], [0, 0]], mat,
-                [aoBase * 0.55, aoBase * 0.55, aoBase, aoBase]);
+              pushQuad(
+                [[cx - hx, 0, cz - hz], [cx + hx, 0, cz + hz], [cx + hx, CURB, cz + hz], [cx - hx, CURB, cz - hz]],
+                n, t,
+                [[0, 0.06], [0.42, 0.06], [0.42, 0], [0, 0]],
+                MATERIALS.CONCRETE, [0.7, 0.7, 1, 1],
+              );
             }
-            continue;
           }
-
-          // 床と天井
-          const aoF = [
-            cornerAo(x, y, 1, 0), cornerAo(x + 1, y, 1, 0),
-            cornerAo(x + 1, y + 1, 1, 0), cornerAo(x, y + 1, 1, 0),
-          ];
-          pushQuad(
-            [[x, 0, y], [x + 1, 0, y], [x + 1, 0, y + 1], [x, 0, y + 1]],
-            [0, 1, 0], [1, 0, 0],
-            [[x, y], [x + 1, y], [x + 1, y + 1], [x, y + 1]],
-            MATERIALS.FLOOR, aoF,
-          );
-          pushQuad(
-            [[x, WALL_H, y + 1], [x + 1, WALL_H, y + 1], [x + 1, WALL_H, y], [x, WALL_H, y]],
-            [0, -1, 0], [1, 0, 0],
-            [[x, y + 1], [x + 1, y + 1], [x + 1, y], [x, y]],
-            MATERIALS.CEILING, [0.75, 0.75, 0.75, 0.75],
-          );
         }
       }
 
-      // ------- 小物と天井照明を置いて、通路の単調さをなくす -------
+      // --- 街灯（ポールは静的ジオメトリ、明かりは点光源） ---
       this.mapLights = [];
-      let seed = 987654321;
-      const rnd = () => {
-        seed = (seed * 1664525 + 1013904223) >>> 0;
-        return seed / 4294967296;
+      this.lampHeads = [];
+      const pushBox = (cx, cy, cz, sx, sy, sz, layerIdx, aoV) => {
+        const faces = [
+          { n: [0, 0, -1], t: [1, 0, 0], hw: sx / 2, hh: sy / 2, c: [cx, cy, cz - sz / 2] },
+          { n: [0, 0, 1], t: [-1, 0, 0], hw: sx / 2, hh: sy / 2, c: [cx, cy, cz + sz / 2] },
+          { n: [-1, 0, 0], t: [0, 0, -1], hw: sz / 2, hh: sy / 2, c: [cx - sx / 2, cy, cz] },
+          { n: [1, 0, 0], t: [0, 0, 1], hw: sz / 2, hh: sy / 2, c: [cx + sx / 2, cy, cz] },
+        ];
+        for (const f of faces) {
+          const e = [0, 1, 0];
+          const v = (a, b) => [
+            f.c[0] + f.t[0] * f.hw * a + e[0] * f.hh * b,
+            f.c[1] + f.t[1] * f.hw * a + e[1] * f.hh * b,
+            f.c[2] + f.t[2] * f.hw * a + e[2] * f.hh * b,
+          ];
+          pushQuad([v(-1, -1), v(1, -1), v(1, 1), v(-1, 1)], f.n, f.t,
+            [[0, 0.3], [0.3, 0.3], [0.3, 0], [0, 0]], layerIdx, [aoV, aoV, aoV, aoV]);
+        }
       };
-      const openCells = [];
-      for (let y = 1; y < size - 1; y++) {
-        for (let x = 1; x < size - 1; x++) if (!tiles[y * size + x]) openCells.push([x, y]);
-      }
 
-      for (const [x, y] of openCells) {
-        const wallN = solid(x, y - 1);
-        const wallS = solid(x, y + 1);
-        const wallW = solid(x - 1, y);
-        const wallE = solid(x + 1, y);
-        const open = 4 - (wallN + wallS + wallW + wallE);
-        const r = rnd();
-
-        // 天井の照明（実際に光る）
-        if ((x + y * 3) % 7 === 0 && r < 0.75) {
-          pushBox(x + 0.5, WALL_H - 0.06, y + 0.5, 0.5, 0.08, 0.16, MATERIALS.PANEL, 1.1);
-          const warm = rnd() < 0.65;
+      for (let y = 2; y < size - 2; y++) {
+        for (let x = 2; x < size - 2; x++) {
+          if (tiles[y * size + x] || kindAt(x, y) !== 1) continue;
+          if ((x * 7 + y * 13) % 9 !== 0) continue;
+          // 車道に面した歩道にだけ置く
+          const roadSide = [[1, 0], [-1, 0], [0, 1], [0, -1]]
+            .find(([dx, dy]) => !tiles[(y + dy) * size + (x + dx)] && kindAt(x + dx, y + dy) === 0);
+          if (!roadSide) continue;
+          const px = x + 0.5;
+          const pz = y + 0.5;
+          pushBox(px, CURB + 1.8, pz, 0.1, 3.6, 0.1, MATERIALS.CONCRETE, 0.9);
+          pushBox(px + roadSide[0] * 0.35, CURB + 3.5, pz + roadSide[1] * 0.35, 0.7, 0.1, 0.7, MATERIALS.CONCRETE, 1);
+          const hx = px + roadSide[0] * 0.55;
+          const hz = pz + roadSide[1] * 0.55;
+          this.lampHeads.push([hx, CURB + 3.35, hz]);
           this.mapLights.push({
-            x: x + 0.5, y: WALL_H - 0.2, z: y + 0.5,
-            r: warm ? 1.5 : 0.5, g: warm ? 1.25 : 1.3, b: warm ? 0.85 : 1.7,
-            range: 5.2,
+            x: hx, y: CURB + 3.3, z: hz,
+            r: 5.5, g: 4.6, b: 3.0, range: 11,
           });
-        }
-
-        // 壁際の木箱・ドラム缶
-        if (open <= 3 && r > 0.62) {
-          const along = wallW || wallE;
-          const ox = wallW ? -0.3 : wallE ? 0.3 : (rnd() - 0.5) * 0.5;
-          const oz = wallN ? -0.3 : wallS ? 0.3 : (rnd() - 0.5) * 0.5;
-          if (rnd() < 0.5) {
-            const h = 0.45 + rnd() * 0.25;
-            pushBox(x + 0.5 + ox, h / 2, y + 0.5 + oz, 0.5, h, 0.5, MATERIALS.HAZARD, 0.85);
-            if (rnd() < 0.4) pushBox(x + 0.5 + ox, h + 0.2, y + 0.5 + oz, 0.36, 0.4, 0.36, MATERIALS.PANEL, 0.9);
-          } else {
-            pushBox(x + 0.5 + ox, 0.35, y + 0.5 + oz, 0.42, 0.7, 0.42, MATERIALS.CONCRETE, 0.85);
-            if (along) pushBox(x + 0.5 + ox, 0.72, y + 0.5 + oz, 0.46, 0.05, 0.46, MATERIALS.PANEL, 1);
-          }
-        }
-
-        // 壁沿いの配管
-        if (open <= 2 && r < 0.3) {
-          const height = 1.85 + rnd() * 0.3;
-          if (wallW) pushBox(x + 0.12, height, y + 0.5, 0.14, 0.14, 1, MATERIALS.PANEL, 0.95);
-          else if (wallE) pushBox(x + 0.88, height, y + 0.5, 0.14, 0.14, 1, MATERIALS.PANEL, 0.95);
-          else if (wallN) pushBox(x + 0.5, height, y + 0.12, 1, 0.14, 0.14, MATERIALS.PANEL, 0.95);
-          else if (wallS) pushBox(x + 0.5, height, y + 0.88, 1, 0.14, 0.14, MATERIALS.PANEL, 0.95);
         }
       }
 
@@ -3130,6 +3375,7 @@ window.__BZ = {};
       bind('aAo', ao, 1);
       gl.bindVertexArray(null);
 
+      if (this.mapMesh) gl.deleteVertexArray(this.mapMesh.vao);
       this.mapMesh = { vao, count: pos.length / 3 };
       this.mapSize = size;
 
@@ -3212,13 +3458,13 @@ window.__BZ = {};
       const q = this.quality;
       gl.uniform3fv(u.uCamPos, camPos);
       gl.uniform3fv(u.uCamDir, camDir);
-      gl.uniform1f(u.uHeadlight, 1.6);
+      gl.uniform1f(u.uHeadlight, 0.55);
       gl.uniform1f(u.uShadows, q.shadows ? 1 : 0);
       gl.uniform1f(u.uMapSize, this.mapSize);
-      gl.uniform3f(u.uAmbientSky, 0.075, 0.095, 0.14);
-      gl.uniform3f(u.uAmbientGround, 0.032, 0.036, 0.045);
-      gl.uniform1f(u.uFogDensity, 0.0034);
-      gl.uniform3f(u.uFogColor, 0.05, 0.06, 0.09);
+      gl.uniform3f(u.uAmbientSky, 0.07, 0.075, 0.115);
+      gl.uniform3f(u.uAmbientGround, 0.028, 0.028, 0.036);
+      gl.uniform1f(u.uFogDensity, 0.0016);
+      gl.uniform3f(u.uFogColor, 0.13, 0.11, 0.16);
 
       const lights = this._gatherLights(game);
       gl.uniform1i(u.uLightCount, lights.count);
@@ -3256,7 +3502,7 @@ window.__BZ = {};
       if (this.mapLights) {
         const near = this.mapLights
           .map((L) => ({ L, d: (L.x - p.x) ** 2 + (L.z - p.y) ** 2 }))
-          .filter((e) => e.d < 90)
+          .filter((e) => e.d < 200)
           .sort((a, b) => a.d - b.d)
           .slice(0, 5);
         for (const { L } of near) add(L.x, L.y, L.z, L.r, L.g, L.b, L.range);
@@ -3316,11 +3562,23 @@ window.__BZ = {};
 
       gl.bindFramebuffer(gl.FRAMEBUFFER, this.sceneTarget.fbo);
       gl.viewport(0, 0, this.width, this.height);
+      gl.clearColor(0.02, 0.025, 0.04, 1);
+      gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+      // --- 夜空（奥行きなしで先に敷く）---
+      gl.disable(gl.DEPTH_TEST);
+      gl.disable(gl.CULL_FACE);
+      gl.useProgram(this.progSky.p);
+      gl.uniform3fv(this.progSky.uniforms.uCamDir, camDir);
+      gl.uniform1f(this.progSky.uniforms.uAspect, aspect);
+      gl.uniform1f(this.progSky.uniforms.uFovScale, Math.tan(fov / 2));
+      gl.bindVertexArray(this.quadVao);
+      gl.drawArrays(gl.TRIANGLES, 0, 3);
+      gl.bindVertexArray(null);
+
       gl.enable(gl.DEPTH_TEST);
       gl.enable(gl.CULL_FACE);
       gl.cullFace(gl.BACK);
-      gl.clearColor(0.02, 0.025, 0.04, 1);
-      gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
 
       // --- 迷路 ---
       gl.useProgram(this.progWorld.p);
@@ -3340,6 +3598,7 @@ window.__BZ = {};
       gl.useProgram(this.progObject.p);
       gl.uniformMatrix4fv(this.progObject.uniforms.uViewProj, false, this.viewProj);
       this._setLightUniforms(this.progObject, game, camPos, camDir);
+      this._drawLamps(camPos);
       this._drawEntities(game);
 
       // 手に持った武器は世界とは別レイヤー扱いにして、壁にめり込ませない
@@ -3350,6 +3609,17 @@ window.__BZ = {};
       gl.disable(gl.DEPTH_TEST);
       gl.disable(gl.CULL_FACE);
       this._postProcess();
+    }
+
+    /** 近くの街灯の発光部を描く。 */
+    _drawLamps(camPos) {
+      if (!this.lampHeads) return;
+      for (const [x, y, z] of this.lampHeads) {
+        const d2 = (x - camPos[0]) ** 2 + (z - camPos[2]) ** 2;
+        if (d2 > 900) continue;
+        compose(this.model, [x, y, z], 0, 0, [0.34, 0.12, 0.34]);
+        this._drawMesh(this.box, this.model, [1, 0.94, 0.8], [3.2, 2.7, 1.7], 0.3, 0.2);
+      }
     }
 
     _drawEntities(game) {
@@ -3717,7 +3987,7 @@ window.__BZ = {};
 
 /* ---------- src/game/engine.js ---------- */
 (function () {
-  const { getAssetSet, getFloorTextures, generateMap, createRng, Sfx, GL_QUALITY, RENDER_2D, Renderer3D, WEAPONS, WEAPON_IDS, createWeaponState, levelForXp, levelProgress, statsFor } = __BZ;
+  const { getAssetSet, getFloorTextures, createRng, generateCity, Sfx, GL_QUALITY, RENDER_2D, Renderer3D, WEAPONS, WEAPON_IDS, createWeaponState, levelForXp, levelProgress, statsFor } = __BZ;
   /**
    * レイキャスティング方式の 3D FPS エンジン（Canvas 2D のみ / 外部ライブラリなし）。
    *
@@ -4029,7 +4299,7 @@ window.__BZ = {};
       this.difficulty = d;
       const rnd = createRng((Math.random() * 0xffffffff) >>> 0);
       this.rnd = rnd;
-      this.map = generateMap(rnd);
+      this.map = generateCity(rnd, 1);
       if (this.gl3d) this.gl3d.buildMap(this.map);
       this.flow = new Int16Array(this.map.size * this.map.size);
       this.flowQueue = new Int32Array(this.map.size * this.map.size);
@@ -4054,8 +4324,9 @@ window.__BZ = {};
       const first = createWeaponState('blaster');
       first.stats = statsFor(WEAPONS.blaster, 1);
       first.reserve = Math.round(first.reserve * (d.ammo / 48));
+      const spawn = this.map.spawn || [1.5, 1.5];
       this.player = {
-        x: 1.5, y: 1.5, angle: 0.7,
+        x: spawn[0], y: spawn[1], angle: 0.7,
         hp: d.hp, maxHp: d.hp,
         score: 0,
         fireCd: 0, recoil: 0, flash: 0, hurtT: 0,
@@ -4066,9 +4337,7 @@ window.__BZ = {};
         switchT: 0, switchTotal: 0, pendingSlot: -1,
       };
       this.applyTier(RENDER_2D, true);
-      // 開けている方向を向いて開始する
-      if (!this.isWall(2.5, 1.5)) this.player.angle = 0;
-      else if (!this.isWall(1.5, 2.5)) this.player.angle = Math.PI / 2;
+      this.faceOpenDirection();
 
       this.state = 'playing';
       this.sfx.resume();
@@ -4076,9 +4345,43 @@ window.__BZ = {};
       this.emitState();
     }
 
+    /** 一番開けている方向を向く。 */
+    faceOpenDirection() {
+      const p = this.player;
+      let best = p.angle;
+      let bestDist = 0;
+      for (let a = 0; a < Math.PI * 2; a += 0.15) {
+        const d = this.castRay(p.x, p.y, Math.cos(a), Math.sin(a)).dist;
+        if (d > bestDist) { bestDist = d; best = a; }
+      }
+      p.angle = best;
+    }
+
+    /** 次のエリア（新しい街並み）へ移動する。 */
+    changeArea() {
+      this.map = generateCity(this.rnd, this.wave);
+      if (this.gl3d) this.gl3d.buildMap(this.map);
+      const cells = this.map.size * this.map.size;
+      this.flow = new Int16Array(cells);
+      this.flowQueue = new Int32Array(cells);
+      this.flowCell = -1;
+
+      const spawn = this.map.spawn || [1.5, 1.5];
+      this.player.x = spawn[0];
+      this.player.y = spawn[1];
+      this.enemies.length = 0;
+      this.projectiles.length = 0;
+      this.pickups.length = 0;
+      this.faceOpenDirection();
+      this.computeFlowField();
+      this.onEvent('newarea', { wave: this.wave });
+    }
+
     startWave() {
       this.wave++;
       const d = this.difficulty;
+      // ウェーブごとに街並みが変わる
+      if (this.wave > 1) this.changeArea();
 
       // 新しい武器が解放されるウェーブなら、武器ケースを配置する
       for (const id of WEAPON_IDS) {
@@ -4088,7 +4391,7 @@ window.__BZ = {};
           break;
         }
       }
-      const count = Math.max(3, Math.min(16, Math.round((3 + this.wave * 1.6) * d.count)));
+      const count = Math.max(4, Math.min(20, Math.round((4 + this.wave * 1.8) * d.count)));
       this.spawnQueue = [];
       for (let i = 0; i < count; i++) {
         this.spawnQueue.push({ type: this.pickEnemyType(), t: 0.25 + i * 0.35 });
@@ -5338,7 +5641,7 @@ window.__BZ = {};
       const pad = 12 * this.uiScale;
       const x0 = this.W - size - pad;
       const y0 = pad;
-      const radius = 8.5; // 表示するタイル半径
+      const radius = 15; // 表示するタイル半径（街が広いので広め）
       const cell = size / (radius * 2);
 
       ctx.save();
@@ -5555,11 +5858,18 @@ window.__BZ = {};
     document.addEventListener('mousemove', (e) => {
       if (usingPointerLock && phase === 'playing') game.look(e.movementX * 0.0022, e.movementY * 0.0016);
     });
+    // ポインターロックの有無にかかわらず、左ボタンで射撃できるようにする。
+    // 押した瞬間にも1発撃つので、一瞬のクリックでも取りこぼさない。
     canvas.addEventListener('mousedown', (e) => {
-      if (phase !== 'playing') return;
-      if (usingPointerLock) { if (e.button === 0) game.input.firing = true; }
+      if (phase !== 'playing' || e.button !== 0) return;
+      if (!usingPointerLock) tryPointerLock();
+      game.input.firing = true;
+      game.fire();
     });
-    window.addEventListener('mouseup', () => { if (usingPointerLock) game.input.firing = false; });
+    window.addEventListener('mouseup', (e) => {
+      if (e.button === 0) game.input.firing = false;
+    });
+    window.addEventListener('blur', () => { game.input.firing = false; });
 
     function tryPointerLock() {
       if (coarse || !canvas.requestPointerLock) return;
@@ -5595,7 +5905,16 @@ window.__BZ = {};
         knob.style.transform = 'translate(0px, 0px)';
         stick.hidden = false;
       } else if (touch.look === null) {
-        touch.look = { id: e.pointerId, x: e.clientX, y: e.clientY, moved: 0, t: performance.now() };
+        touch.look = {
+          id: e.pointerId, x: e.clientX, y: e.clientY, moved: 0,
+          t: performance.now(), mouse: e.pointerType === 'mouse',
+        };
+        // マウスの場合 preventDefault で mousedown が来なくなるため、ここで発砲する
+        if (e.pointerType === 'mouse' && e.button === 0) {
+          tryPointerLock();
+          game.input.firing = true;
+          game.fire();
+        }
       }
       try { root.setPointerCapture(e.pointerId); } catch (err) { /* 無視 */ }
     }, { passive: false });
@@ -5632,8 +5951,11 @@ window.__BZ = {};
         stick.hidden = true;
       } else if (touch.look && touch.look.id === e.pointerId) {
         const quick = performance.now() - touch.look.t < 260 && touch.look.moved < 14;
+        const wasMouse = touch.look.mouse;
         touch.look = null;
-        if (quick && phase === 'playing') game.fire(); // タップ／クリックで単発射撃
+        if (wasMouse) game.input.firing = false;
+        // タップで単発射撃（マウスは押した時点で撃っているので除外）
+        else if (quick && phase === 'playing') game.fire();
       }
     }
     root.addEventListener('pointerup', endPointer);
