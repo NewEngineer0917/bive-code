@@ -236,7 +236,8 @@
   position: absolute;
   inset: 0;
   display: flex;
-  align-items: center;
+  /* 中央寄せのままだと画面より高いときに上端が切れてスクロールできないため */
+  align-items: flex-start;
   justify-content: center;
   padding: 20px;
   background: radial-gradient(circle at 50% 40%, rgba(20, 30, 60, 0.82), rgba(3, 5, 12, 0.95));
@@ -246,6 +247,7 @@
 
 .fps-panel {
   width: min(520px, 100%);
+  margin: auto;
   background: rgba(9, 13, 26, 0.9);
   border: 1px solid rgba(120, 220, 255, 0.3);
   border-radius: 18px;
@@ -477,8 +479,8 @@
 
 .fps-reload-btn {
   position: absolute;
-  right: calc(env(safe-area-inset-right, 0px) + 26px);
-  bottom: calc(env(safe-area-inset-bottom, 0px) + 122px);
+  right: calc(env(safe-area-inset-right, 0px) + 124px);
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 100px);
   width: 66px;
   height: 66px;
   border-radius: 50%;
@@ -489,3 +491,68 @@
   font-weight: 800;
   pointer-events: auto;
 }
+
+.fps-mode {
+  margin-left: 6px;
+  padding: 0 5px;
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: #070a12;
+  background: #4be0c0;
+  border-radius: 2px;
+}
+
+.fps-mode.semi { background: #ffd447; }
+
+.fps-weapon-perk {
+  font-size: 10px;
+  color: #8fa0c0;
+}
+
+.fps-slot .mode {
+  float: right;
+  font-size: 9px;
+  opacity: 0.7;
+}
+
+.fps-hint {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 86px);
+  padding: 6px 14px;
+  background: rgba(8, 12, 24, 0.8);
+  border: 1px solid rgba(120, 220, 255, 0.3);
+  border-radius: 6px;
+  font-size: clamp(10px, 2.4vw, 13px);
+  color: #8fa0c0;
+  white-space: nowrap;
+}
+
+.fps-hint b { color: #4be0c0; }
+
+.fps-arsenal {
+  width: 100%;
+  margin-top: 16px;
+  border-collapse: collapse;
+  font-size: clamp(10px, 2.6vw, 12px);
+  text-align: left;
+}
+
+.fps-arsenal th {
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: #8fa0c0;
+  border-bottom: 1px solid rgba(120, 220, 255, 0.2);
+  padding: 4px 6px;
+}
+
+.fps-arsenal td {
+  padding: 4px 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  color: #cfe0f5;
+}
+
+.fps-arsenal td.auto { color: #4be0c0; font-weight: 700; }
+.fps-arsenal td.semi { color: #ffd447; font-weight: 700; }

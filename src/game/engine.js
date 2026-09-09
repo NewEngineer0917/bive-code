@@ -473,6 +473,8 @@ export class Game {
       time: this.elapsed,
       // 武器まわり
       weapon: def ? def.name : '',
+      weaponMode: def ? (def.auto ? 'AUTO' : 'SEMI') : '',
+      weaponPerk: def && w ? def.levels[w.level - 1].perk : '',
       weaponLevel: w ? w.level : 1,
       weaponMaxLevel: def ? def.levels.length : 4,
       weaponRatio: w ? levelProgress(def, w.xp) : 0,
@@ -486,6 +488,7 @@ export class Game {
       slots: p.weapons.map((x) => ({
         id: x.id,
         short: WEAPONS[x.id].short,
+        mode: WEAPONS[x.id].auto ? 'AUTO' : 'SEMI',
         level: x.level,
         mag: x.mag,
         reserve: x.reserve,
@@ -1048,7 +1051,12 @@ export class Game {
     p.switchTotal = 0.42;
     p.pendingSlot = -1;
     this.sfx.weaponUp();
-    this.onEvent('newweapon', { name: WEAPONS[id].name, slot: WEAPONS[id].slot });
+    this.onEvent('newweapon', {
+      name: WEAPONS[id].name,
+      slot: WEAPONS[id].slot,
+      mode: WEAPONS[id].auto ? '押しっぱなしで連射' : '1発ずつ（押すたびに発射）',
+      magazine: statsFor(WEAPONS[id], 1).magazine,
+    });
     return true;
   }
 

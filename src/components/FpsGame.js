@@ -52,6 +52,7 @@ export default function FpsGame() {
   const [touch, setTouch] = useState(false);
   const [portrait, setPortrait] = useState(false);
   const [best, setBest] = useState(0);
+  const [showHint, setShowHint] = useState(false);
   const [difficulty, setDifficulty] = useState('normal');
 
   const setPhase = useCallback((next) => {
@@ -73,7 +74,11 @@ export default function FpsGame() {
         } else if (type === 'weaponup') {
           setBanner({ text: `${payload.name} Lv.${payload.level}`, sub: payload.perk, id: Date.now() });
         } else if (type === 'newweapon') {
-          setBanner({ text: 'NEW WEAPON', sub: `${payload.name}（${payload.slot} キーで切替）`, id: Date.now() });
+          setBanner({
+            text: 'NEW WEAPON',
+            sub: `${payload.name}：${payload.mode}／装弾 ${payload.magazine}（${payload.slot} キーで切替）`,
+            id: Date.now(),
+          });
         } else if (type === 'gameover') {
           setResult(payload);
           setPhase('over');
@@ -341,6 +346,9 @@ export default function FpsGame() {
     game.resize();
     game.newGame(key);
     setPhase('playing');
+    setShowHint(true);
+    clearTimeout(startGame.hintTimer);
+    startGame.hintTimer = setTimeout(() => setShowHint(false), 8000);
 
     if (isCoarsePointer()) {
       const el = wrapRef.current;
@@ -429,7 +437,11 @@ export default function FpsGame() {
                 <span className="fps-chip">敵 {hud.enemies}</span>
               </div>
               <div className="fps-weapon">
-                <span className="fps-weapon-name">{hud.weapon}</span>
+                <span className="fps-weapon-name">
+                  {hud.weapon}
+                  <b className={`fps-mode${hud.weaponMode === 'SEMI' ? ' semi' : ''}`}>{hud.weaponMode}</b>
+                </span>
+                <span className="fps-weapon-perk">Lv.{hud.weaponLevel}　{hud.weaponPerk}</span>
                 <div className="fps-xpbar">
                   <i style={{ width: `${(hud.weaponMax ? 1 : hud.weaponRatio || 0) * 100}%` }} />
                 </div>
@@ -449,6 +461,12 @@ export default function FpsGame() {
               </div>
             )}
 
+            {showHint && (
+              <div className="fps-hint">
+                <b>1〜4</b> 武器切替　<b>R</b> リロード　<b>押しっぱなし</b>で連射（SEMI表示の武器は単発）
+              </div>
+            )}
+
             <div className="fps-slots">
               {hud.slots.map((sl, i) => (
                 <button
@@ -462,6 +480,7 @@ export default function FpsGame() {
                   }}
                 >
                   <span className="num">{sl.slot}</span>{sl.short}
+                  <span className="mode">{sl.mode}</span>
                   <span className="ammo">Lv.{sl.level}  {sl.mag}/{sl.reserve}</span>
                 </button>
               ))}
@@ -543,13 +562,23 @@ export default function FpsGame() {
             ))}
             {best > 0 && <p className="fps-note">ハイスコア: {best}</p>}
             {portrait && touch && <p className="fps-note">📱 横向き（ランドスケープ）だと遊びやすいです</p>}
+            <table className="fps-arsenal">
+              <tbody>
+                <tr><th>武器</th><th>射撃</th><th>装弾</th><th>特徴</th></tr>
+                <tr><td>1 パルスブラスター</td><td className="auto">連射</td><td>14</td><td>標準。扱いやすい</td></tr>
+                <tr><td>2 スキャッターガン</td><td className="semi">単発</td><td>6</td><td>近距離で高威力の散弾</td></tr>
+                <tr><td>3 パルスSMG</td><td className="auto">連射</td><td>34</td><td>高速連射・低威力</td></tr>
+                <tr><td>4 レールランス</td><td className="semi">単発</td><td>4</td><td>貫通する高威力の一撃</td></tr>
+              </tbody>
+            </table>
             <div className="fps-help">
               <b>PC:</b> WASD / 矢印 = 移動、マウス = 視点、クリック or スペース = 射撃、Shift = ダッシュ、Esc = ポーズ<br />
               <b>武器:</b> 1〜4 キー / ホイール / Q・E で切替、R でリロード（弾切れは自動装填）<br />
               <b>スマホ:</b> 画面左側をドラッグ = 移動（大きく倒すとダッシュ）、右側をドラッグ = 視点、右側タップ or FIRE = 射撃、RELOAD と下部スロットで武器操作<br />
               <b>目標:</b> ウェーブごとに増える敵を全滅させる。弾薬箱・救急箱・強化コアを拾って生き延びよう。<br />
-              <b>武器の成長:</b> 4種類の武器を持ち替えて戦う。使い込むほど XP が貯まり Lv.4 まで成長し、
-              威力・装弾数・連射・リロード速度が上がり、3D モデルの見た目も変化する。
+              <b>武器の成長:</b> 使うほど XP が貯まり Lv.4 まで成長。威力・装弾数・連射速度・リロード時間・
+              貫通数が上がり、銃の形そのものが変化する。<b>連射</b>＝押しっぱなしで撃ち続ける。<b>単発</b>＝押すたびに1発。
+              撃ち切ると自動でリロードする。
             </div>
             <Link to="/" className="fps-back">← アプリに戻る</Link>
           </div>

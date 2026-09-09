@@ -50,7 +50,8 @@
     } else if (type === 'weaponup') {
       showBanner(payload.name + ' Lv.' + payload.level, payload.perk);
     } else if (type === 'newweapon') {
-      showBanner('NEW WEAPON', payload.name + '（' + payload.slot + ' キーで切替）');
+      showBanner('NEW WEAPON', payload.name + '：' + payload.mode
+        + '／装弾 ' + payload.magazine + '（' + payload.slot + ' キーで切替）');
     } else if (type === 'gameover_LEGACY') {
       const b = el('banner');
       b.hidden = false;
@@ -78,7 +79,11 @@
     el('c-score').textContent = 'SCORE ' + h.score;
     el('c-enemies').textContent = '敵 ' + h.enemies;
     el('ammo').textContent = h.mag;
-    el('w-name').textContent = h.weapon;
+    el('w-name').firstChild.textContent = h.weapon;
+    const mode = el('w-mode');
+    mode.textContent = h.weaponMode;
+    mode.classList.toggle('semi', h.weaponMode === 'SEMI');
+    el('w-perk').textContent = 'Lv.' + h.weaponLevel + '　' + h.weaponPerk;
     el('w-level').textContent = 'Lv.' + h.weaponLevel;
     el('w-fill').style.width = ((h.weaponRatio || 0) * 100) + '%';
     el('reserve').textContent = h.reserve;
@@ -98,7 +103,7 @@
         b.type = 'button';
         b.className = 'slot';
         b.innerHTML = '<span class="num">' + sl.slot + '</span>' + sl.short
-          + '<span class="ammo"></span>';
+          + '<span class="mode">' + sl.mode + '</span><span class="ammo"></span>';
         b.addEventListener('pointerdown', (e) => {
           e.preventDefault();
           e.stopPropagation();
@@ -270,6 +275,13 @@
 
   function startGame(key) {
     el('slots').innerHTML = '';
+    const hint = el('hint');
+    hint.hidden = false;
+    hint.style.animation = 'none';
+    void hint.offsetWidth;
+    hint.style.animation = '';
+    clearTimeout(startGame._t);
+    startGame._t = setTimeout(() => { hint.hidden = true; }, 8000);
     difficulty = key || difficulty;
     game.sfx.resume();
     setPhase('playing');

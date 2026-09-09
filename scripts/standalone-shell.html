@@ -183,6 +183,41 @@
     border: 1px solid var(--line);
     max-width: min(260px, 46vw);
   }
+  #w-mode {
+    margin-left: 6px;
+    padding: 0 5px;
+    font-size: 9px;
+    letter-spacing: 0.12em;
+    color: var(--ink);
+    background: var(--teal);
+  }
+  #w-mode.semi { background: var(--amber); }
+  #w-perk {
+    font-family: var(--body);
+    font-size: 10px;
+    letter-spacing: 0;
+    color: var(--slate);
+  }
+  #hint {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 86px);
+    padding: 6px 14px;
+    background: rgba(7, 10, 18, 0.8);
+    border: 1px solid var(--line);
+    font-size: clamp(10px, 2.4vw, 13px);
+    letter-spacing: 0.02em;
+    color: var(--slate);
+    animation: fade-out 8s forwards;
+  }
+  #hint b { color: var(--teal); font-family: var(--display); }
+  @keyframes fade-out {
+    0%, 70% { opacity: 1; }
+    100% { opacity: 0; }
+  }
+  .slot .mode { float: right; font-size: 9px; opacity: 0.7; }
+
   .weapon > span {
     font-family: var(--display);
     font-size: clamp(10px, 2.3vw, 12px);
@@ -275,8 +310,8 @@
   }
   #fire-btn:active { transform: scale(0.94); background: radial-gradient(circle at 35% 30%, rgba(255, 205, 160, 0.85), rgba(190, 55, 40, 0.7)); }
   #reload-btn {
-    right: calc(env(safe-area-inset-right, 0px) + 26px);
-    bottom: calc(env(safe-area-inset-bottom, 0px) + 122px);
+    right: calc(env(safe-area-inset-right, 0px) + 124px);
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 100px);
     width: 66px; height: 66px;
     font-size: 11px;
     border: 1px solid rgba(255, 212, 71, 0.6);
@@ -297,7 +332,8 @@
     position: absolute;
     inset: 0;
     display: flex;
-    align-items: center;
+    /* 中央寄せのままだと画面より高いときに上端が掴めなくなるので margin:auto で中央寄せする */
+    align-items: flex-start;
     justify-content: center;
     padding: 20px;
     background:
@@ -308,6 +344,7 @@
 
   .panel {
     width: min(520px, 100%);
+    margin: auto;
     background: rgba(12, 18, 32, 0.92);
     border: 1px solid var(--line);
     padding: clamp(20px, 4vw, 32px);
@@ -381,6 +418,29 @@
   .specs { margin: 18px 0 0; font-size: 11px; line-height: 1.8; color: rgba(143, 160, 192, 0.75); letter-spacing: 0.04em; }
   .specs b { color: var(--slate); font-weight: 400; }
 
+  .arsenal {
+    width: 100%;
+    margin-top: 16px;
+    border-collapse: collapse;
+    font-size: clamp(10px, 2.6vw, 12px);
+    text-align: left;
+  }
+  .arsenal th {
+    font-family: var(--display);
+    font-weight: 600;
+    letter-spacing: 0.1em;
+    color: var(--slate);
+    border-bottom: 1px solid rgba(120, 220, 255, 0.2);
+    padding: 4px 6px;
+  }
+  .arsenal td {
+    padding: 4px 6px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    color: #cfe0f5;
+  }
+  .arsenal td.auto { color: var(--teal); font-family: var(--display); }
+  .arsenal td.semi { color: var(--amber); font-family: var(--display); }
+
   @media (prefers-reduced-motion: reduce) {
     #banner, #ammo-box.empty #ammo { animation: none; }
   }
@@ -400,7 +460,8 @@
         <span class="chip" id="c-enemies">敵 0</span>
       </div>
       <div class="weapon">
-        <span id="w-name">パルスブラスター</span>
+        <span id="w-name">パルスブラスター<b id="w-mode">AUTO</b></span>
+        <span id="w-perk">標準装備</span>
         <div class="xpbar"><i id="w-fill"></i></div>
       </div>
     </div>
@@ -410,6 +471,9 @@
     </div>
     <div id="reload-bar" hidden><i></i><span>RELOADING</span></div>
     <div id="slots"></div>
+    <div id="hint" hidden>
+      <b>1〜4</b> 武器切替　<b>R</b> リロード　<b>押しっぱなし</b>で連射（SEMI表示の武器は単発）
+    </div>
 
     <div class="tools">
       <button type="button" class="icon-btn" id="pause-btn" aria-label="ポーズ">❚❚</button>
@@ -437,6 +501,19 @@
       <button type="button" class="btn" data-difficulty="hard">むずかしい ではじめる</button>
       <p class="note" id="best"></p>
       <p class="note" id="hint-portrait" hidden>横向きにすると視界が広がります</p>
+      <table class="arsenal">
+        <tr><th>武器</th><th>射撃</th><th>装弾</th><th>特徴</th></tr>
+        <tr><td>1 パルスブラスター</td><td class="auto">連射</td><td>14</td><td>標準。扱いやすい</td></tr>
+        <tr><td>2 スキャッターガン</td><td class="semi">単発</td><td>6</td><td>近距離で高威力の散弾</td></tr>
+        <tr><td>3 パルスSMG</td><td class="auto">連射</td><td>34</td><td>高速連射・低威力</td></tr>
+        <tr><td>4 レールランス</td><td class="semi">単発</td><td>4</td><td>貫通する高威力の一撃</td></tr>
+      </table>
+      <p class="specs" style="margin-top:8px">
+        武器は使うほど XP が貯まり <b>Lv.4</b> まで成長します（威力・装弾数・連射速度・
+        リロード時間・貫通数が上がり、銃の形も変わります）。<br>
+        <b>連射</b>＝射撃ボタンを押しっぱなしで撃ち続けます。<b>単発</b>＝押すたびに1発。
+        弾を撃ち切ると自動でリロードします。
+      </p>
       <dl class="keys">
         <dt>PC 移動</dt><dd>W A S D ／ 矢印キー（Shift でダッシュ）</dd>
         <dt>PC 視点</dt><dd>マウス。カーソルが固定されない環境では画面右側をドラッグ</dd>

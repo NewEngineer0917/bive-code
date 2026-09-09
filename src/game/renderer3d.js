@@ -16,7 +16,7 @@ import { mat4, multiply, perspective, lookAt, compose } from './glmath';
 
 const WALL_H = 2.4;   // 壁の高さ（メートル相当）
 const EYE_H = 1.6;    // 視点の高さ
-const MAX_LIGHTS = 8;
+const MAX_LIGHTS = 12;
 
 /** ゲーム内の角度（XZ 平面）を、メッシュの Y 軸回転に変換する。 */
 const yawFor = (a) => Math.PI / 2 - a;
@@ -414,6 +414,38 @@ function sphereMesh(seg = 14, ring = 10) {
   return { pos: new Float32Array(pos), nrm: new Float32Array(nrm) };
 }
 
+/** 単位円筒（Z 軸方向、長さ1・直径1）。銃身やコイルに使う。 */
+function cylinderMesh(seg = 14) {
+  const pos = [];
+  const nrm = [];
+  const ring = (i) => {
+    const a = (i / seg) * Math.PI * 2;
+    return [Math.cos(a) * 0.5, Math.sin(a) * 0.5];
+  };
+  for (let i = 0; i < seg; i++) {
+    const [x0, y0] = ring(i);
+    const [x1, y1] = ring(i + 1);
+    // 側面
+    const quad = [
+      [x0, y0, -0.5], [x1, y1, -0.5], [x1, y1, 0.5],
+      [x0, y0, -0.5], [x1, y1, 0.5], [x0, y0, 0.5],
+    ];
+    const n0 = [x0 * 2, y0 * 2, 0];
+    const n1 = [x1 * 2, y1 * 2, 0];
+    const ns = [n0, n1, n1, n0, n1, n0];
+    quad.forEach((v, k) => {
+      pos.push(v[0], v[1], v[2]);
+      nrm.push(ns[k][0], ns[k][1], 0);
+    });
+    // 前後のふた
+    pos.push(0, 0, 0.5, x0, y0, 0.5, x1, y1, 0.5);
+    nrm.push(0, 0, 1, 0, 0, 1, 0, 0, 1);
+    pos.push(0, 0, -0.5, x1, y1, -0.5, x0, y0, -0.5);
+    nrm.push(0, 0, -1, 0, 0, -1, 0, 0, -1);
+  }
+  return { pos: new Float32Array(pos), nrm: new Float32Array(nrm) };
+}
+
 export class Renderer3D {
   static isSupported() {
     try {
@@ -440,6 +472,7 @@ export class Renderer3D {
     this.quadVao = this._makeQuad();
     this.box = this._makeObjectMesh(boxMesh());
     this.sphere = this._makeObjectMesh(sphereMesh());
+    this.cyl = this._makeObjectMesh(cylinderMesh());
 
     this._initTextures();
 
@@ -540,6 +573,40 @@ export class Renderer3D {
       return 1 - 0.35 * Math.min(1, side1 + side2);
     };
 
+    // 任意の向きの面を1枚追加する（法線 n と接線 t から巻き順を決める）
+    const pushFace = (center, n, t, halfT, halfE, layerIdx, ao, uvScale) => {
+      const e = [
+        t[1] * n[2] - t[2] * n[1],
+        t[2] * n[0] - t[0] * n[2],
+        t[0] * n[1] - t[1] * n[0],
+      ];
+      const v = (a, b) => [
+        center[0] + t[0] * halfT * a + e[0] * halfE * b,
+        center[1] + t[1] * halfT * a + e[1] * halfE * b,
+        center[2] + t[2] * halfT * a + e[2] * halfE * b,
+      ];
+      const us = uvScale || 1;
+      pushQuad(
+        [v(-1, -1), v(1, -1), v(1, 1), v(-1, 1)],
+        n, t,
+        [[0, halfE * 2 * us], [halfT * 2 * us, halfE * 2 * us], [halfT * 2 * us, 0], [0, 0]],
+        layerIdx, [ao, ao, ao, ao],
+      );
+    };
+
+    // 直方体（小物）を追加する
+    const pushBox = (cx, cy, cz, sx, sy, sz, layerIdx, ao) => {
+      const hx = sx / 2;
+      const hy = sy / 2;
+      const hz = sz / 2;
+      pushFace([cx, cy, cz - hz], [0, 0, -1], [1, 0, 0], hx, hy, layerIdx, ao, 1);
+      pushFace([cx, cy, cz + hz], [0, 0, 1], [-1, 0, 0], hx, hy, layerIdx, ao, 1);
+      pushFace([cx - hx, cy, cz], [-1, 0, 0], [0, 0, -1], hz, hy, layerIdx, ao, 1);
+      pushFace([cx + hx, cy, cz], [1, 0, 0], [0, 0, 1], hz, hy, layerIdx, ao, 1);
+      pushFace([cx, cy + hy, cz], [0, 1, 0], [1, 0, 0], hx, hz, layerIdx, ao * 1.15, 1);
+      pushFace([cx, cy - hy, cz], [0, -1, 0], [1, 0, 0], hx, hz, layerIdx, ao * 0.6, 1);
+    };
+
     const pushQuad = (verts, normal, tangent, uvs, layerIdx, aos) => {
       // 面の向き（法線）と巻き順を一致させる。逆だと背面カリングで消える
       const order = [0, 2, 1, 0, 3, 2];
@@ -568,11 +635,13 @@ export class Renderer3D {
         if (tile) {
           const mat = matForTile(tile);
           // 隣が空いている面だけを作る（内側は見えないので省く）
+          // 接線は「法線と上方向に対して右手系」になる向きを選ぶ。
+          // ここを間違えると面が裏返り、背面カリングで壁が透けて見える
           const dirs = [
             { d: [0, -1], n: [0, 0, -1], t: [1, 0, 0] },
             { d: [0, 1], n: [0, 0, 1], t: [-1, 0, 0] },
-            { d: [-1, 0], n: [-1, 0, 0], t: [0, 0, 1] },
-            { d: [1, 0], n: [1, 0, 0], t: [0, 0, -1] },
+            { d: [-1, 0], n: [-1, 0, 0], t: [0, 0, -1] },
+            { d: [1, 0], n: [1, 0, 0], t: [0, 0, 1] },
           ];
           for (const { d, n, t } of dirs) {
             if (solid(x + d[0], y + d[1])) continue;
@@ -611,6 +680,62 @@ export class Renderer3D {
           [[x, y + 1], [x + 1, y + 1], [x + 1, y], [x, y]],
           MATERIALS.CEILING, [0.75, 0.75, 0.75, 0.75],
         );
+      }
+    }
+
+    // ------- 小物と天井照明を置いて、通路の単調さをなくす -------
+    this.mapLights = [];
+    let seed = 987654321;
+    const rnd = () => {
+      seed = (seed * 1664525 + 1013904223) >>> 0;
+      return seed / 4294967296;
+    };
+    const openCells = [];
+    for (let y = 1; y < size - 1; y++) {
+      for (let x = 1; x < size - 1; x++) if (!tiles[y * size + x]) openCells.push([x, y]);
+    }
+
+    for (const [x, y] of openCells) {
+      const wallN = solid(x, y - 1);
+      const wallS = solid(x, y + 1);
+      const wallW = solid(x - 1, y);
+      const wallE = solid(x + 1, y);
+      const open = 4 - (wallN + wallS + wallW + wallE);
+      const r = rnd();
+
+      // 天井の照明（実際に光る）
+      if ((x + y * 3) % 7 === 0 && r < 0.75) {
+        pushBox(x + 0.5, WALL_H - 0.06, y + 0.5, 0.5, 0.08, 0.16, MATERIALS.PANEL, 1.1);
+        const warm = rnd() < 0.65;
+        this.mapLights.push({
+          x: x + 0.5, y: WALL_H - 0.2, z: y + 0.5,
+          r: warm ? 1.5 : 0.5, g: warm ? 1.25 : 1.3, b: warm ? 0.85 : 1.7,
+          range: 5.2,
+        });
+      }
+
+      // 壁際の木箱・ドラム缶
+      if (open <= 3 && r > 0.62) {
+        const along = wallW || wallE;
+        const ox = wallW ? -0.3 : wallE ? 0.3 : (rnd() - 0.5) * 0.5;
+        const oz = wallN ? -0.3 : wallS ? 0.3 : (rnd() - 0.5) * 0.5;
+        if (rnd() < 0.5) {
+          const h = 0.45 + rnd() * 0.25;
+          pushBox(x + 0.5 + ox, h / 2, y + 0.5 + oz, 0.5, h, 0.5, MATERIALS.HAZARD, 0.85);
+          if (rnd() < 0.4) pushBox(x + 0.5 + ox, h + 0.2, y + 0.5 + oz, 0.36, 0.4, 0.36, MATERIALS.PANEL, 0.9);
+        } else {
+          pushBox(x + 0.5 + ox, 0.35, y + 0.5 + oz, 0.42, 0.7, 0.42, MATERIALS.CONCRETE, 0.85);
+          if (along) pushBox(x + 0.5 + ox, 0.72, y + 0.5 + oz, 0.46, 0.05, 0.46, MATERIALS.PANEL, 1);
+        }
+      }
+
+      // 壁沿いの配管
+      if (open <= 2 && r < 0.3) {
+        const height = 1.85 + rnd() * 0.3;
+        if (wallW) pushBox(x + 0.12, height, y + 0.5, 0.14, 0.14, 1, MATERIALS.PANEL, 0.95);
+        else if (wallE) pushBox(x + 0.88, height, y + 0.5, 0.14, 0.14, 1, MATERIALS.PANEL, 0.95);
+        else if (wallN) pushBox(x + 0.5, height, y + 0.12, 1, 0.14, 0.14, MATERIALS.PANEL, 0.95);
+        else if (wallS) pushBox(x + 0.5, height, y + 0.88, 1, 0.14, 0.14, MATERIALS.PANEL, 0.95);
       }
     }
 
@@ -697,7 +822,7 @@ export class Renderer3D {
     this.sceneTarget = makeTarget(w, h, true);
     this.depthBuf = gl.createRenderbuffer();
     gl.bindRenderbuffer(gl.RENDERBUFFER, this.depthBuf);
-    gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT16, w, h);
+    gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, w, h);
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.sceneTarget.fbo);
     gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, this.depthBuf);
 
@@ -755,6 +880,16 @@ export class Renderer3D {
       add(p.x, EYE_H, p.y, k, k * 0.84, k * 0.55, 7);
     }
     for (const b of game.projectiles) add(b.x, 1.1, b.y, 1.6, 0.5, 2.6, 4.0);
+    // マップに置かれた照明のうち、近いものを採用する
+    if (this.mapLights) {
+      const near = this.mapLights
+        .map((L) => ({ L, d: (L.x - p.x) ** 2 + (L.z - p.y) ** 2 }))
+        .filter((e) => e.d < 90)
+        .sort((a, b) => a.d - b.d)
+        .slice(0, 5);
+      for (const { L } of near) add(L.x, L.y, L.z, L.r, L.g, L.b, L.range);
+    }
+
     for (const it of game.pickups) {
       if (n >= MAX_LIGHTS - 1) break;
       if (it.kind === 'core') add(it.x, 0.5, it.y, 0.5, 1.5, 2.0, 3.0);
@@ -803,7 +938,7 @@ export class Renderer3D {
 
     const aspect = this.width / this.height;
     const fov = aspect >= 1.4 ? 1.15 : aspect >= 1 ? 1.25 : 1.5;
-    perspective(this.proj, fov, aspect, 0.05, 60);
+    perspective(this.proj, fov, aspect, 0.08, 45);
     lookAt(this.view, camPos, target, [0, 1, 0]);
     multiply(this.viewProj, this.proj, this.view);
 
@@ -834,6 +969,9 @@ export class Renderer3D {
     gl.uniformMatrix4fv(this.progObject.uniforms.uViewProj, false, this.viewProj);
     this._setLightUniforms(this.progObject, game, camPos, camDir);
     this._drawEntities(game);
+
+    // 手に持った武器は世界とは別レイヤー扱いにして、壁にめり込ませない
+    gl.clear(gl.DEPTH_BUFFER_BIT);
     this._drawWeapon(game, camPos, p.angle, pitch);
 
     // --- 後処理 ---
@@ -918,85 +1056,130 @@ export class Renderer3D {
   }
 
   /**
-   * 武器のパーツ構成。武器ごとに形が違い、レベルが上がると
-   * 銃身が伸び、装飾やサイドポッドが増え、発光が強くなる。
-   * r=右, u=上, f=前 のオフセット（メートル）。
+   * 武器のパーツ構成。
+   *
+   * r=右 / u=上 / f=前 のオフセット（メートル）と、箱か円筒かを指定する。
+   * レベルが上がるごとにパーツが増えて形が変わる：
+   *   Lv1 素の状態 → Lv2 レール・フォアグリップ → Lv3 スコープや銃身の延長
+   *   → Lv4 エネルギーコイルと発光コア
    */
   static weaponParts(id, level, accent) {
-    const metalDark = [0.11, 0.115, 0.145];
-    const metalMid = [0.17, 0.18, 0.225];
-    const grip = [0.09, 0.085, 0.1];
-    const glow = accent.map((c) => c * (0.45 + level * 0.22));
+    const steel = [0.13, 0.135, 0.16];
+    const steelLight = [0.2, 0.21, 0.25];
+    const gunmetal = [0.08, 0.085, 0.105];
+    const grip = [0.07, 0.065, 0.075];
+    const glowMul = 0.3 + level * 0.16;
+    const glow = accent.map((c) => c * glowMul);
     const parts = [];
-    const add = (r, u, f, sx, sy, sz, color, emissive, rough, metal, role) => {
-      parts.push({ r, u, f, sx, sy, sz, color, emissive: emissive || [0, 0, 0], rough, metal, role });
-    };
+    const box = (r, u, f, sx, sy, sz, color, emissive, rough, metal, role) =>
+      parts.push({ mesh: 'box', r, u, f, sx, sy, sz, color, emissive: emissive || [0, 0, 0], rough, metal, role });
+    const cyl = (r, u, f, dia, len, color, emissive, rough, metal, role) =>
+      parts.push({ mesh: 'cyl', r, u, f, sx: dia, sy: dia, sz: len, color, emissive: emissive || [0, 0, 0], rough, metal, role });
 
     if (id === 'scatter') {
-      add(0, -0.012, 0.02, 0.075, 0.062, 0.2, metalMid, null, 0.45, 0.7);        // 機関部
-      add(0, -0.052, -0.055, 0.05, 0.075, 0.075, grip, null, 0.65, 0.2);          // グリップ
-      add(0, -0.005, -0.115, 0.055, 0.05, 0.13, [0.14, 0.1, 0.08], null, 0.7, 0.1); // ストック
-      for (const side of [-1, 1]) {
-        add(side * 0.019, 0.012, 0.16 + level * 0.012, 0.026, 0.026, 0.12 + level * 0.012,
-          metalDark, null, 0.35, 0.85, 'muzzle');
+      // 上下二連の太いショットガン
+      box(0, -0.005, 0.0, 0.062, 0.06, 0.2, steel, null, 0.4, 0.75);            // 機関部
+      box(0, 0.028, -0.04, 0.05, 0.022, 0.12, steelLight, null, 0.35, 0.8);      // 上部レシーバー
+      box(0.0, -0.062, -0.055, 0.045, 0.08, 0.06, grip, null, 0.62, 0.15);       // グリップ
+      box(0, -0.02, -0.14, 0.05, 0.062, 0.13, [0.1, 0.075, 0.06], null, 0.68, 0.1); // ストック
+      const bl = 0.19 + level * 0.022;
+      cyl(0, 0.016, 0.1 + bl / 2, 0.034, bl, gunmetal, null, 0.3, 0.9, 'muzzle');  // 上銃身
+      cyl(0, -0.02, 0.1 + bl / 2, 0.034, bl, gunmetal, null, 0.3, 0.9);            // 下銃身
+      if (level >= 2) {
+        cyl(0, -0.002, 0.14, 0.075, 0.1, steel, null, 0.45, 0.7);                  // ヒートシールド
+        box(0, -0.055, 0.09, 0.05, 0.032, 0.1, gunmetal, null, 0.5, 0.5, 'pump');  // ポンプ
+      } else {
+        box(0, -0.055, 0.07, 0.045, 0.03, 0.09, gunmetal, null, 0.5, 0.5, 'pump');
       }
-      if (level >= 3) add(0, 0.012, 0.24 + level * 0.012, 0.062, 0.03, 0.03, metalMid, null, 0.4, 0.8);
-      add(0, -0.045, 0.1, 0.045, 0.03, 0.09, metalDark, null, 0.5, 0.6, 'pump');   // ポンプ
-      add(0, 0.03, 0.0, 0.03, 0.012, 0.07, accent, glow, 0.2, 0.1);                // 発光ライン
+      if (level >= 3) {
+        cyl(0, 0.016, 0.13 + bl, 0.046, 0.05, steelLight, null, 0.35, 0.85);       // マズルチョーク
+        cyl(0, -0.02, 0.13 + bl, 0.046, 0.05, steelLight, null, 0.35, 0.85);
+        for (let i = 0; i < 3; i++) box(0.05, -0.03 + i * 0.018, -0.02, 0.012, 0.014, 0.05, [0.35, 0.2, 0.08], null, 0.5, 0.4);
+      }
+      box(0, 0.045, 0.02, 0.026, 0.012, 0.08, accent, glow, 0.2, 0.1);             // 発光ライン
       if (level >= 4) {
-        add(0.045, 0.0, 0.1, 0.02, 0.045, 0.07, metalMid, glow.map((c) => c * 0.4), 0.3, 0.7);
-        add(-0.045, 0.0, 0.1, 0.02, 0.045, 0.07, metalMid, glow.map((c) => c * 0.4), 0.3, 0.7);
+        for (let i = 0; i < 3; i++) cyl(0, -0.002, 0.14 + i * 0.06, 0.088, 0.016, accent, glow, 0.25, 0.3);
+        box(0, -0.038, 0.0, 0.03, 0.02, 0.05, accent, glow.map((c) => c * 1.4), 0.2, 0.1);
       }
       return parts;
     }
 
     if (id === 'smg') {
-      add(0, 0, 0.03, 0.05, 0.055, 0.17, metalMid, null, 0.42, 0.72);
-      add(0, -0.05, -0.03, 0.042, 0.07, 0.055, grip, null, 0.65, 0.2);
-      add(0, -0.055, 0.055, 0.032, 0.09, 0.045, metalDark, null, 0.55, 0.4, 'mag'); // 弾倉
-      add(0, 0.012, 0.16 + level * 0.008, 0.02, 0.02, 0.09 + level * 0.008, metalDark, null, 0.3, 0.88, 'muzzle');
-      if (level >= 3) add(0, 0.012, 0.24, 0.03, 0.03, 0.06, metalDark, null, 0.45, 0.75); // サプレッサー
-      if (level >= 4) add(0.028, 0.012, 0.17, 0.018, 0.018, 0.08, metalDark, null, 0.3, 0.88, 'muzzle');
-      add(0, 0.038, 0.02, 0.026, 0.01, 0.06, accent, glow, 0.2, 0.1);
-      if (level >= 2) add(0, 0.048, 0.08, 0.02, 0.016, 0.03, metalDark, null, 0.4, 0.6); // サイト
+      // 小型で縦に長い弾倉を持つ短機関銃
+      box(0, 0, 0.02, 0.044, 0.052, 0.17, steel, null, 0.4, 0.78);
+      box(0, 0.032, 0.0, 0.036, 0.014, 0.15, steelLight, null, 0.35, 0.82);        // 上部レール
+      box(0, -0.055, -0.03, 0.038, 0.075, 0.05, grip, null, 0.6, 0.15);            // グリップ
+      box(0, -0.062, 0.06, 0.03, 0.1, 0.042, gunmetal, null, 0.5, 0.45, 'mag');    // 弾倉
+      const bl = 0.1 + level * 0.014;
+      cyl(0, 0.008, 0.12 + bl / 2, 0.022, bl, gunmetal, null, 0.28, 0.92, 'muzzle');
+      if (level >= 2) {
+        box(0, 0.05, 0.05, 0.018, 0.02, 0.03, gunmetal, null, 0.4, 0.6);           // ドットサイト
+        box(0, 0.058, 0.05, 0.016, 0.006, 0.024, accent, glow, 0.2, 0.1);
+        box(0, -0.04, 0.13, 0.03, 0.035, 0.05, gunmetal, null, 0.55, 0.4);         // フォアグリップ
+      }
+      if (level >= 3) cyl(0, 0.008, 0.14 + bl, 0.042, 0.09, steel, null, 0.42, 0.8); // サプレッサー
+      if (level >= 4) {
+        cyl(0.024, 0.008, 0.12 + bl / 2, 0.018, bl, gunmetal, null, 0.28, 0.92, 'muzzle');
+        for (let i = 0; i < 4; i++) box(0.026, 0.01, 0.0 + i * 0.03, 0.006, 0.02, 0.016, accent, glow, 0.2, 0.2);
+      }
+      box(0, -0.012, 0.05, 0.03, 0.024, 0.05, accent, glow, 0.2, 0.1);             // エネルギーセル
       return parts;
     }
 
     if (id === 'rail') {
-      add(0, 0, 0.04, 0.055, 0.06, 0.26, metalMid, null, 0.38, 0.78);
-      add(0, -0.055, -0.05, 0.045, 0.075, 0.06, grip, null, 0.65, 0.2);
-      add(0, 0.045, 0.02, 0.03, 0.03, 0.1, metalDark, null, 0.35, 0.8);              // スコープ
-      add(0, 0.045, 0.075, 0.026, 0.026, 0.02, accent, glow.map((c) => c * 1.5), 0.15, 0.1);
-      add(0, 0.005, 0.26 + level * 0.016, 0.018, 0.018, 0.18 + level * 0.016, metalDark, null, 0.25, 0.9, 'muzzle');
-      for (const side of [-1, 1]) {  // レール（発光）
-        add(side * 0.026, 0.005, 0.24 + level * 0.01, 0.008, 0.03, 0.2 + level * 0.012,
-          accent, glow, 0.2, 0.2);
+      // 長身のレールライフル
+      box(0, 0, 0.02, 0.05, 0.058, 0.3, steel, null, 0.35, 0.82);
+      box(0, -0.062, -0.06, 0.042, 0.08, 0.055, grip, null, 0.6, 0.15);
+      box(0, -0.02, -0.16, 0.046, 0.07, 0.1, [0.09, 0.09, 0.11], null, 0.6, 0.3);   // ストック
+      cyl(0, 0.052, 0.02, 0.04, 0.13, gunmetal, null, 0.3, 0.85);                   // スコープ
+      cyl(0, 0.052, 0.088, 0.032, 0.012, accent, glow.map((c) => c * 1.6), 0.15, 0.1); // レンズ
+      const bl = 0.24 + level * 0.03;
+      cyl(0, 0.004, 0.17 + bl / 2, 0.022, bl, gunmetal, null, 0.24, 0.94, 'muzzle');
+      for (const side of [-1, 1]) {  // 加速レール（発光）
+        box(side * 0.03, 0.004, 0.17 + bl / 2, 0.008, 0.03, bl * 0.9, accent, glow, 0.2, 0.25);
       }
-      add(0, -0.04, 0.04, 0.05, 0.045, 0.07, metalDark, null, 0.5, 0.5, 'mag');      // キャパシタ
-      if (level >= 3) add(0, -0.005, 0.14, 0.075, 0.05, 0.05, metalMid, null, 0.4, 0.75);
+      box(0, -0.05, 0.06, 0.055, 0.05, 0.08, gunmetal, null, 0.45, 0.55, 'mag');    // キャパシタ
+      if (level >= 2) {
+        for (let i = 0; i < 3; i++) cyl(0, 0.004, 0.2 + i * 0.09, 0.062, 0.018, steelLight, glow.map((c) => c * 0.25), 0.3, 0.7);
+      }
+      if (level >= 3) {
+        for (const side of [-1, 1]) cyl(side * 0.02, -0.05, 0.24, 0.014, 0.1, steel, null, 0.4, 0.8);  // バイポッド
+      }
+      if (level >= 4) {
+        for (const side of [-1, 1]) box(side * 0.026, 0.004, 0.2 + bl, 0.012, 0.05, 0.06, steelLight, glow, 0.25, 0.6);
+        box(0, 0.03, -0.05, 0.03, 0.016, 0.06, accent, glow.map((c) => c * 1.5), 0.2, 0.1);
+      }
       return parts;
     }
 
-    // blaster
-    add(0, 0, 0.02, 0.052, 0.055, 0.17, metalMid, null, 0.42, 0.72);
-    add(0, -0.05, -0.02, 0.04, 0.07, 0.05, grip, null, 0.65, 0.2);
-    add(0, 0.005, 0.15 + level * 0.01, 0.02, 0.02, 0.1 + level * 0.012, metalDark, null, 0.32, 0.88, 'muzzle');
-    add(0, -0.005, 0.06, 0.035, 0.03, 0.055, accent, glow, 0.2, 0.1);                 // エネルギーセル
-    add(0, -0.048, 0.04, 0.03, 0.07, 0.04, metalDark, null, 0.55, 0.4, 'mag');
-    if (level >= 2) add(0, 0.04, 0.05, 0.024, 0.014, 0.08, metalDark, null, 0.4, 0.7); // トップレール
-    if (level >= 3) {
-      for (const side of [-1, 1]) {
-        add(side * 0.038, 0.0, 0.07, 0.016, 0.035, 0.07, metalMid, glow.map((c) => c * 0.35), 0.3, 0.7);
-      }
+    // blaster: エネルギーハンドガン
+    box(0, 0, 0.02, 0.044, 0.05, 0.16, steel, null, 0.38, 0.8);                     // スライド
+    box(0, -0.055, -0.02, 0.038, 0.075, 0.048, grip, null, 0.6, 0.15);              // グリップ
+    box(0, -0.052, 0.03, 0.03, 0.06, 0.038, gunmetal, null, 0.5, 0.45, 'mag');      // 弾倉
+    const bl = 0.09 + level * 0.018;
+    cyl(0, 0.006, 0.11 + bl / 2, 0.024, bl, gunmetal, null, 0.28, 0.92, 'muzzle');  // 銃身
+    box(0, -0.006, 0.05, 0.03, 0.026, 0.05, accent, glow, 0.2, 0.1);                // エネルギーセル
+    if (level >= 2) {
+      box(0, 0.032, 0.04, 0.022, 0.012, 0.1, steelLight, null, 0.35, 0.82);         // トップレール
+      box(0, 0.046, 0.0, 0.016, 0.016, 0.024, gunmetal, null, 0.4, 0.6);            // リアサイト
     }
-    if (level >= 4) add(0, 0.005, 0.24, 0.032, 0.032, 0.05, accent, glow.map((c) => c * 1.4), 0.2, 0.2);
+    if (level >= 3) {
+      for (const side of [-1, 1]) cyl(side * 0.032, 0.0, 0.09, 0.02, 0.08, steel, glow.map((c) => c * 0.3), 0.32, 0.75); // サイドポッド
+      box(0, -0.03, 0.02, 0.024, 0.014, 0.03, accent, glow.map((c) => c * 1.3), 0.2, 0.1); // 弾数表示
+    }
+    if (level >= 4) {
+      for (let i = 0; i < 3; i++) cyl(0, 0.006, 0.1 + i * 0.045, 0.046, 0.014, accent, glow, 0.22, 0.3); // 加速コイル
+      cyl(0, 0.006, 0.13 + bl, 0.038, 0.045, steelLight, glow.map((c) => c * 0.5), 0.3, 0.8);            // マズルブレーキ
+    }
     return parts;
   }
 
   /**
    * 武器を一人称視点で描く。
-   * 反動・リロード（下げて回す＋弾倉の抜き差し）・持ち替え（画面外へ下ろす）を
-   * すべて行列アニメーションで表現する。
+   *
+   * カメラの右・上・前ベクトルを基準に配置するので、見上げ・見下ろしでも
+   * 手元の見え方が破綻しない。反動・リロード・持ち替えはこの基準に対する
+   * オフセットと回転で表現する。
    */
   _drawWeapon(game, camPos, angle, pitch) {
     const p = game.player;
@@ -1004,90 +1187,93 @@ export class Renderer3D {
     if (!w) return;
     const def = WEAPONS[w.id];
 
-    // --- アニメーションの状態を決める ---
+    // --- アニメーション状態 ---
     const recoil = p.recoil || 0;
-    const reloadT = p.reloadTotal ? 1 - p.reloadT / p.reloadTotal : 1;
     const reloading = p.reloadT > 0;
+    const reloadT = p.reloadTotal ? 1 - p.reloadT / p.reloadTotal : 1;
     const switchRatio = p.switchTotal ? p.switchT / p.switchTotal : 0;
     const lower = p.switchT > 0 ? 1 - Math.abs(switchRatio - 0.5) * 2 : 0;
 
-    // 反動：後ろに下がりながら銃口が跳ね上がる
-    let animF = -recoil * 0.045 * def.kick;
-    let animU = -recoil * 0.012 * def.kick;
-    let animPitch = recoil * 0.16 * def.kick;
-
-    // リロード：手前に引き下げて傾ける
+    let animF = -recoil * 0.05 * def.kick;
+    let animU = -recoil * 0.014 * def.kick;
+    let animPitch = recoil * 0.2 * def.kick;
     let magDrop = 0;
     let pumpSlide = 0;
+
     if (reloading) {
       const dip = Math.sin(reloadT * Math.PI);
-      animU -= dip * 0.11;
-      animF -= dip * 0.03;
-      animPitch -= dip * 0.85;
-      // 弾倉は前半で落ち、後半で戻る
-      magDrop = reloadT < 0.5 ? (reloadT / 0.5) * 0.13 : (1 - (reloadT - 0.5) / 0.5) * 0.13;
+      animU -= dip * 0.12;
+      animF -= dip * 0.04;
+      animPitch -= dip * 0.9;
+      magDrop = reloadT < 0.5 ? (reloadT / 0.5) * 0.14 : (1 - (reloadT - 0.5) / 0.5) * 0.14;
       pumpSlide = Math.sin(reloadT * Math.PI * 2) * 0.05;
     } else if (recoil > 0 && def.id === 'scatter') {
-      pumpSlide = recoil * 0.055; // 発砲後のポンプアクション
+      pumpSlide = recoil * 0.06;
     }
 
-    // 持ち替え：画面下へ振り下ろして持ち上げる
-    animU -= lower * 0.4;
-    animPitch -= lower * 1.2;
+    animU -= lower * 0.42;
+    animPitch -= lower * 1.3;
 
-    // 歩行の揺れ
-    const bobR = Math.sin(game.bob) * 0.012;
-    const bobU = Math.abs(Math.cos(game.bob)) * 0.01;
-    const sway = Math.sin(game.elapsed * 1.3) * 0.004;
+    const bobR = Math.sin(game.bob) * 0.011;
+    const bobU = Math.abs(Math.cos(game.bob)) * 0.009;
+    const sway = Math.sin(game.elapsed * 1.2) * 0.003;
 
-    // --- 基準となる位置と姿勢 ---
-    const baseR = 0.085 + bobR + sway;
-    const baseU = -0.115 + bobU + animU;
-    const baseF = 0.3 + animF;
+    // --- カメラ基準の直交基底 ---
+    const cp = Math.cos(pitch);
+    const sp = Math.sin(pitch);
+    const fwd = [Math.cos(angle) * cp, sp, Math.sin(angle) * cp];
     const right = [Math.cos(angle + Math.PI / 2), 0, Math.sin(angle + Math.PI / 2)];
-    const fwd = [Math.cos(angle), pitch, Math.sin(angle)];
+    const up = [
+      right[1] * fwd[2] - right[2] * fwd[1],
+      right[2] * fwd[0] - right[0] * fwd[2],
+      right[0] * fwd[1] - right[1] * fwd[0],
+    ];
+
+    const baseR = 0.105 + bobR + sway;
+    const baseU = -0.135 + bobU + animU;
+    const baseF = 0.42 + animF;   // 少し前に構えると画面占有が減り歪みも小さい
+    const gunScale = 0.9;
     const cosA = Math.cos(animPitch);
     const sinA = Math.sin(animPitch);
 
     const parts = Renderer3D.weaponParts(w.id, w.level, def.accent);
-    this.ambientBoost = 0.5; // 手元は常に見えるようにする
-    for (const part of parts) {
+    this.ambientBoost = 0.45; // 手元は常に見えるようにする
+
+    const placePart = (part, extraScale) => {
       let u = part.u;
       let f = part.f;
       if (part.role === 'mag') u -= magDrop;
       if (part.role === 'pump') f -= pumpSlide;
-      // 銃全体の傾き（グリップ付近を軸に回す）
       const ru = u * cosA - f * sinA;
       const rf = u * sinA + f * cosA;
+      const offR = baseR + part.r * gunScale;
+      const offU = baseU + ru * gunScale;
+      const offF = baseF + rf * gunScale;
+      const x = camPos[0] + right[0] * offR + up[0] * offU + fwd[0] * offF;
+      const y = camPos[1] + right[1] * offR + up[1] * offU + fwd[1] * offF;
+      const z = camPos[2] + right[2] * offR + up[2] * offU + fwd[2] * offF;
+      const k = (extraScale || 1) * gunScale;
+      compose(this.model, [x, y, z], yawFor(angle), pitch + animPitch,
+        [part.sx * k, part.sy * k, part.sz * k]);
+      const mesh = part.mesh === 'cyl' ? this.cyl : this.box;
+      this._drawMesh(mesh, this.model, part.color, part.emissive, part.rough, part.metal);
+    };
 
-      const offR = baseR + part.r;
-      const offU = baseU + ru;
-      const offF = baseF + rf;
-      const x = camPos[0] + right[0] * offR + fwd[0] * offF;
-      const y = camPos[1] + offU + fwd[1] * offF;
-      const z = camPos[2] + right[2] * offR + fwd[2] * offF;
-      compose(this.model, [x, y, z], yawFor(angle), pitch + animPitch, [part.sx, part.sy, part.sz]);
-      this._drawMesh(this.box, this.model, part.color, part.emissive, part.rough, part.metal);
-    }
-
+    for (const part of parts) placePart(part);
     this.ambientBoost = 0;
 
     // 銃口の閃光
     if (p.flash > 0) {
       const muzzle = parts.filter((x) => x.role === 'muzzle').pop() || parts[0];
-      const mf = muzzle.f + muzzle.sz * 0.5;
-      const ru = muzzle.u * cosA - mf * sinA;
-      const rf = muzzle.u * sinA + mf * cosA;
-      const offR = baseR + muzzle.r;
-      const offU = baseU + ru;
-      const offF = baseF + rf;
-      const x = camPos[0] + right[0] * offR + fwd[0] * offF;
-      const y = camPos[1] + offU + fwd[1] * offF;
-      const z = camPos[2] + right[2] * offR + fwd[2] * offF;
-      const size = 0.05 + p.flash * (def.id === 'scatter' ? 1.1 : 0.6);
-      const glow = p.flash * (def.id === 'rail' ? 22 : 14);
-      compose(this.model, [x, y, z], yawFor(angle), pitch, [size, size, size * 1.3]);
-      this._drawMesh(this.box, this.model, [1, 0.92, 0.78], [glow, glow * 0.8, glow * 0.5], 0.1, 0);
+      const size = 0.05 + p.flash * (def.id === 'scatter' ? 1.2 : 0.7);
+      const glow = p.flash * (def.id === 'rail' ? 24 : 15);
+      placePart({
+        mesh: 'box',
+        r: muzzle.r, u: muzzle.u, f: muzzle.f + muzzle.sz * 0.5 + size * 0.4,
+        sx: size, sy: size, sz: size * 1.4,
+        color: [1, 0.93, 0.8], emissive: [glow, glow * 0.8, glow * 0.5],
+        rough: 0.1, metal: 0,
+      });
     }
   }
 
