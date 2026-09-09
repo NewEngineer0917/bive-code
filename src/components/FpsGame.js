@@ -32,6 +32,7 @@ const isCoarsePointer = () =>
 export default function FpsGame() {
   const wrapRef = useRef(null);
   const canvasRef = useRef(null);
+  const glCanvasRef = useRef(null);
   const gameRef = useRef(null);
   const phaseRef = useRef('menu');
   const touchRef = useRef({ move: null, look: null });
@@ -39,8 +40,10 @@ export default function FpsGame() {
 
   const [phase, setPhaseState] = useState('menu'); // menu | playing | paused | over
   const [hud, setHud] = useState({
-    hp: 100, maxHp: 100, ammo: 0, score: 0, wave: 0, enemies: 0,
-    weapon: 'ブラスター Mk.I', weaponLevel: 1, weaponRatio: 0, tier: '8-BIT',
+    hp: 100, maxHp: 100, score: 0, wave: 0, enemies: 0,
+    weapon: 'パルスブラスター', weaponLevel: 1, weaponRatio: 0,
+    mag: 0, magSize: 0, reserve: 0, reloading: false, reloadRatio: 1,
+    slot: 0, slots: [],
   });
   const [result, setResult] = useState(null);
   const [banner, setBanner] = useState(null);
@@ -63,13 +66,14 @@ export default function FpsGame() {
     setBest(readBest());
 
     const game = new Game(canvasRef.current, {
+      glCanvas: glCanvasRef.current,
       onEvent: (type, payload) => {
         if (type === 'wave') {
           setBanner({ text: `WAVE ${payload.wave}`, id: Date.now() });
-        } else if (type === 'tier') {
-          setBanner({ text: payload.label, sub: `映像・音響が進化：${payload.note}`, id: Date.now() });
         } else if (type === 'weaponup') {
-          setBanner({ text: `WEAPON Lv.${payload.level}`, sub: `${payload.name}／${payload.perk}`, id: Date.now() });
+          setBanner({ text: `${payload.name} Lv.${payload.level}`, sub: payload.perk, id: Date.now() });
+        } else if (type === 'newweapon') {
+          setBanner({ text: 'NEW WEAPON', sub: `${payload.name}（${payload.slot} キーで切替）`, id: Date.now() });
         } else if (type === 'gameover') {
           setResult(payload);
           setPhase('over');
@@ -157,6 +161,14 @@ export default function FpsGame() {
         if (g && phaseRef.current === 'playing') g.setPaused(true);
         return;
       }
+      const g = game();
+      if (g && phaseRef.current === 'playing') {
+        if (e.code === 'KeyR') { g.reload(); return; }
+        if (e.code === 'KeyQ') { g.cycleWeapon(-1); return; }
+        if (e.code === 'KeyE') { g.cycleWeapon(1); return; }
+        const digit = /^Digit([1-4])$/.exec(e.code);
+        if (digit) { g.switchWeapon(Number(digit[1]) - 1); return; }
+      }
       if (e.repeat) return;
       keys.add(e.code);
       apply();
@@ -211,11 +223,18 @@ export default function FpsGame() {
       }
     };
 
+    const onWheel = (e) => {
+      const g = gameRef.current;
+      if (g && phaseRef.current === 'playing') g.cycleWeapon(e.deltaY > 0 ? 1 : -1);
+    };
+
+    window.addEventListener('wheel', onWheel, { passive: true });
     document.addEventListener('mousemove', onMouseMove);
     canvas.addEventListener('mousedown', onMouseDown);
     window.addEventListener('mouseup', onMouseUp);
     document.addEventListener('pointerlockchange', onLockChange);
     return () => {
+      window.removeEventListener('wheel', onWheel);
       document.removeEventListener('mousemove', onMouseMove);
       canvas.removeEventListener('mousedown', onMouseDown);
       window.removeEventListener('mouseup', onMouseUp);
@@ -393,6 +412,7 @@ export default function FpsGame() {
 
   return (
     <div className="fps-root" ref={wrapRef}>
+      <canvas ref={glCanvasRef} className="fps-canvas fps-gl" />
       <canvas ref={canvasRef} className="fps-canvas" />
 
       <div className="fps-layer">
@@ -407,7 +427,6 @@ export default function FpsGame() {
                 <span className="fps-chip">WAVE {hud.wave}</span>
                 <span className="fps-chip">SCORE {hud.score}</span>
                 <span className="fps-chip">敵 {hud.enemies}</span>
-                <span className="fps-chip tier">{hud.tier}</span>
               </div>
               <div className="fps-weapon">
                 <span className="fps-weapon-name">{hud.weapon}</span>
@@ -417,10 +436,35 @@ export default function FpsGame() {
               </div>
             </div>
 
-            <div className={`fps-ammo${hud.ammo === 0 ? ' empty' : ''}`}>
-              <b>{hud.ammo}</b>
-              <span>AMMO</span>
+            <div className={`fps-ammo${hud.mag === 0 ? ' empty' : ''}`}>
+              <b>{hud.mag}</b>
+              <span>/ {hud.reserve}</span>
               <em>Lv.{hud.weaponLevel}</em>
+            </div>
+
+            {hud.reloading && (
+              <div className="fps-reload">
+                <i style={{ width: `${hud.reloadRatio * 100}%` }} />
+                <span>RELOADING</span>
+              </div>
+            )}
+
+            <div className="fps-slots">
+              {hud.slots.map((sl, i) => (
+                <button
+                  key={sl.id}
+                  type="button"
+                  className={`fps-slot${i === hud.slot ? ' active' : ''}`}
+                  onPointerDown={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    gameRef.current.switchWeapon(i);
+                  }}
+                >
+                  <span className="num">{sl.slot}</span>{sl.short}
+                  <span className="ammo">Lv.{sl.level}  {sl.mag}/{sl.reserve}</span>
+                </button>
+              ))}
             </div>
 
             <div className="fps-tools">
@@ -451,6 +495,17 @@ export default function FpsGame() {
                   onPointerLeave={holdSprint(false)}
                 >
                   DASH
+                </button>
+                <button
+                  type="button"
+                  className="fps-reload-btn"
+                  onPointerDown={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    gameRef.current.reload();
+                  }}
+                >
+                  RELOAD
                 </button>
               </>
             )}
@@ -490,9 +545,11 @@ export default function FpsGame() {
             {portrait && touch && <p className="fps-note">📱 横向き（ランドスケープ）だと遊びやすいです</p>}
             <div className="fps-help">
               <b>PC:</b> WASD / 矢印 = 移動、マウス = 視点、クリック or スペース = 射撃、Shift = ダッシュ、Esc = ポーズ<br />
-              <b>スマホ:</b> 画面左側をドラッグ = 移動（大きく倒すとダッシュ）、右側をドラッグ = 視点、右側タップ or FIRE = 射撃<br />
+              <b>武器:</b> 1〜4 キー / ホイール / Q・E で切替、R でリロード（弾切れは自動装填）<br />
+              <b>スマホ:</b> 画面左側をドラッグ = 移動（大きく倒すとダッシュ）、右側をドラッグ = 視点、右側タップ or FIRE = 射撃、RELOAD と下部スロットで武器操作<br />
               <b>目標:</b> ウェーブごとに増える敵を全滅させる。弾薬箱・救急箱・強化コアを拾って生き延びよう。<br />
-              <b>進化:</b> ウェーブが進むごとに映像が 8BIT のドット絵から最新の 3D 描画へ、音も同時に進化する。撃破で武器がレベルアップし Mk.VI まで強化される。
+              <b>武器の成長:</b> 4種類の武器を持ち替えて戦う。使い込むほど XP が貯まり Lv.4 まで成長し、
+              威力・装弾数・連射・リロード速度が上がり、3D モデルの見た目も変化する。
             </div>
             <Link to="/" className="fps-back">← アプリに戻る</Link>
           </div>

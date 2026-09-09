@@ -9,7 +9,11 @@
 import { getAssetSet, getFloorTextures } from './textures';
 import { generateMap, createRng } from './mapGen';
 import { Sfx } from './audio';
-import { TIERS, tierForWave, weaponForXp, weaponProgress } from './fidelity';
+import { GL_QUALITY, RENDER_2D } from './fidelity';
+import { Renderer3D } from './renderer3d';
+import {
+  WEAPONS, WEAPON_IDS, createWeaponState, levelForXp, levelProgress, statsFor,
+} from './weapons';
 
 const TAU = Math.PI * 2;
 const PLAYER_RADIUS = 0.22;
@@ -18,7 +22,7 @@ const SPRINT_SPEED = 4.5;
 const KEY_TURN_SPEED = 2.6;
 const FOG_DISTANCE = 13;
 
-/* 撃破で得られる武器XP */
+/* 撃破で得られる武器XP（使っていた武器に入る） */
 const XP_BY_TYPE = { drone: 1, gunner: 2, brute: 4 };
 
 export const DIFFICULTIES = {
@@ -31,14 +35,17 @@ const ENEMY_TYPES = {
   drone: {
     name: 'ドローン', hp: 55, speed: 2.0, damage: 9, score: 100, radius: 0.3,
     scale: 0.62, hover: 0.32, range: 1.05, cooldown: 0.9, ranged: false,
+    center3d: 1.15, height3d: 0.8,
   },
   gunner: {
     name: 'ガンナー', hp: 75, speed: 1.35, damage: 11, score: 150, radius: 0.32,
     scale: 0.85, hover: 0, range: 8.5, cooldown: 1.7, ranged: true,
+    center3d: 1.1, height3d: 1.7,
   },
   brute: {
     name: 'ブルート', hp: 185, speed: 1.05, damage: 19, score: 300, radius: 0.42,
     scale: 1.1, hover: 0, range: 1.35, cooldown: 1.5, ranged: false,
+    center3d: 1.3, height3d: 2.3,
   },
 };
 
@@ -99,9 +106,13 @@ function normAngle(a) {
 }
 
 export class Game {
-  constructor(canvas, { onEvent } = {}) {
+  constructor(canvas, { onEvent, glCanvas } = {}) {
     this.canvas = canvas;
-    this.ctx = canvas.getContext('2d', { alpha: false });
+    // 3D モードでは HUD だけをこのキャンバスに描くので透過が必要
+    this.ctx = canvas.getContext('2d', { alpha: true });
+    this.glCanvas = glCanvas || null;
+    this.gl3d = null;
+    this.mode3d = false;
     this.sfx = new Sfx();
     this.onEvent = onEvent || (() => {});
 
@@ -137,7 +148,7 @@ export class Game {
     this.bloomBuf = document.createElement('canvas');
     this.lights = [];
 
-    this.tier = TIERS[0];
+    this.tier = RENDER_2D;
     this.assets = getAssetSet(this.tier.assetSet);
     this.paletteLut = null;
 
@@ -170,7 +181,7 @@ export class Game {
     if (!isFinite(dt) || dt <= 0) dt = 1 / 60;
     dt = Math.min(dt, 0.05);
     if (this.state === 'playing') this.update(dt);
-    this.render();
+    this.render(dt);
     this.autoQuality(dt);
   };
 
@@ -216,6 +227,33 @@ export class Game {
     this.uiScale = clamp(Math.min(this.W, this.H) / 720, 0.6, 2.4);
 
     this.applyTier(this.tier, true);
+    if (this.mode3d && this.gl3d) this.gl3d.resize(this.W, this.H, true);
+  }
+
+  /**
+   * ティアに応じて 2D（レイキャスティング）と 3D（WebGL）を切り替える。
+   * WebGL が使えない環境では 2D のまま動き続ける。
+   */
+  setupRenderMode() {
+    const want3d = this.glCanvas && Renderer3D.isSupported();
+    if (want3d && !this.gl3d) {
+      try {
+        this.gl3d = new Renderer3D(this.glCanvas);
+        if (this.map) this.gl3d.buildMap(this.map);
+      } catch (e) {
+        this.gl3d = null;
+        this.onEvent('renderer', { mode: '2d', reason: String(e && e.message) });
+      }
+    }
+    this.mode3d = !!(want3d && this.gl3d);
+    if (this.glCanvas) this.glCanvas.style.display = this.mode3d ? 'block' : 'none';
+    if (this.mode3d) {
+      this.gl3d.setQuality({
+        ...GL_QUALITY,
+        scale: GL_QUALITY.scale * this.quality * (this.coarse ? 0.8 : 1),
+      });
+      this.gl3d.resize(this.W, this.H, true);
+    }
   }
 
   /**
@@ -228,6 +266,7 @@ export class Game {
     this.tier = tier;
     this.assets = getAssetSet(tier.assetSet);
     this.sfx.setTier(tier.audio);
+    this.setupRenderMode();
 
     // バッファ解像度（モバイルでは上限を下げる）
     const cap = Math.round(tier.maxWidth * (this.coarse ? 0.72 : 1) * this.quality);
@@ -279,6 +318,7 @@ export class Game {
     const rnd = createRng((Math.random() * 0xffffffff) >>> 0);
     this.rnd = rnd;
     this.map = generateMap(rnd);
+    if (this.gl3d) this.gl3d.buildMap(this.map);
     this.flow = new Int16Array(this.map.size * this.map.size);
     this.flowQueue = new Int32Array(this.map.size * this.map.size);
     this.flowTimer = 0;
@@ -299,15 +339,21 @@ export class Game {
     // 各ティアのアセットを先に作っておき、進化のたびに固まらないようにする
     for (let i = 0; i < 3; i++) getAssetSet(i);
 
-    const weapon = weaponForXp(0);
+    const first = createWeaponState('blaster');
+    first.stats = statsFor(WEAPONS.blaster, 1);
+    first.reserve = Math.round(first.reserve * (d.ammo / 48));
     this.player = {
       x: 1.5, y: 1.5, angle: 0.7,
       hp: d.hp, maxHp: d.hp,
-      ammo: d.ammo, score: 0,
+      score: 0,
       fireCd: 0, recoil: 0, flash: 0, hurtT: 0,
-      xp: 0, weapon,
+      weapons: [first],
+      slot: 0,
+      triggerHeld: false,
+      reloadT: 0, reloadTotal: 0,
+      switchT: 0, switchTotal: 0, pendingSlot: -1,
     };
-    this.applyTier(tierForWave(1), true);
+    this.applyTier(RENDER_2D, true);
     // 開けている方向を向いて開始する
     if (!this.isWall(2.5, 1.5)) this.player.angle = 0;
     else if (!this.isWall(1.5, 2.5)) this.player.angle = Math.PI / 2;
@@ -322,12 +368,13 @@ export class Game {
     this.wave++;
     const d = this.difficulty;
 
-    // ウェーブが進むごとに描画・音の「時代」が 1 段進む
-    const tier = tierForWave(this.wave);
-    if (tier !== this.tier) {
-      this.applyTier(tier);
-      this.sfx.tierUp();
-      this.onEvent('tier', { label: tier.label, note: tier.note, id: tier.id });
+    // 新しい武器が解放されるウェーブなら、武器ケースを配置する
+    for (const id of WEAPON_IDS) {
+      const def = WEAPONS[id];
+      if (this.wave >= def.unlockWave && !this.player.weapons.some((w) => w.id === id)) {
+        this.spawnPickup('weapon', id);
+        break;
+      }
     }
     const count = Math.max(3, Math.min(16, Math.round((3 + this.wave * 1.6) * d.count)));
     this.spawnQueue = [];
@@ -385,10 +432,10 @@ export class Game {
     });
   }
 
-  spawnPickup(kind) {
+  spawnPickup(kind, weaponId) {
     if (this.pickups.length > 8) return;
     const cell = this.findSpawnCell(4);
-    this.pickups.push({ kind, x: cell[0], y: cell[1], anim: this.rnd() * 6 });
+    this.pickups.push({ kind, weaponId, x: cell[0], y: cell[1], anim: this.rnd() * 6 });
   }
 
   emitState() {
@@ -412,25 +459,39 @@ export class Game {
   getHud() {
     const p = this.player;
     if (!p) return { hp: 0, maxHp: 100, ammo: 0, score: 0, wave: 0, enemies: 0, hurt: 0 };
-    const prog = weaponProgress(p.xp);
+    const w = this.currentWeapon();
+    const def = w ? WEAPONS[w.id] : null;
+    const stats = w ? this.statsOf(w) : null;
     return {
       hp: Math.max(0, Math.ceil(p.hp)),
       maxHp: p.maxHp,
-      ammo: p.ammo,
-      maxAmmo: p.weapon.magazine,
       score: p.score,
       wave: this.wave,
       enemies: this.enemies.filter((e) => !e.dying).length + this.spawnQueue.length,
       hurt: clamp(p.hurtT / 0.5, 0, 1),
       kills: this.kills,
       time: this.elapsed,
-      weapon: p.weapon.name,
-      weaponLevel: p.weapon.level,
-      weaponPerk: p.weapon.perk,
-      weaponRatio: prog.ratio,
-      weaponMax: !prog.next,
-      tier: this.tier.label,
-      tierId: this.tier.id,
+      // 武器まわり
+      weapon: def ? def.name : '',
+      weaponLevel: w ? w.level : 1,
+      weaponMaxLevel: def ? def.levels.length : 4,
+      weaponRatio: w ? levelProgress(def, w.xp) : 0,
+      mag: w ? w.mag : 0,
+      magSize: stats ? stats.magazine : 0,
+      reserve: w ? w.reserve : 0,
+      reloading: p.reloadT > 0,
+      reloadRatio: p.reloadTotal ? 1 - p.reloadT / p.reloadTotal : 1,
+      switching: p.switchT > 0,
+      slot: p.slot,
+      slots: p.weapons.map((x) => ({
+        id: x.id,
+        short: WEAPONS[x.id].short,
+        level: x.level,
+        mag: x.mag,
+        reserve: x.reserve,
+        slot: WEAPONS[x.id].slot,
+      })),
+      renderer: this.mode3d ? '3D' : '2D',
     };
   }
 
@@ -580,8 +641,10 @@ export class Game {
     this.shake = Math.max(0, this.shake - dt * 2.2);
 
     this.pitchBuf = this.pitch * this.bufH;
+    this.updateWeapon(dt);
     this.updatePlayer(dt);
     if (this.input.firing) this.fire();
+    else p.triggerHeld = false;
 
     // 経路マップはプレイヤーがマスをまたいだとき、または一定間隔で更新する
     const cell = (p.y | 0) * this.map.size + (p.x | 0);
@@ -612,7 +675,10 @@ export class Game {
         this.waveBreak = 2.6;
         p.score += 200 * this.wave;
         p.hp = Math.min(p.maxHp, p.hp + 15);
-        p.ammo = Math.min(p.weapon.magazine, p.ammo + 12);
+        for (const w of p.weapons) {
+          const def = WEAPONS[w.id];
+          w.reserve = Math.min(def.reserveMax, w.reserve + Math.round(def.reserveMax * 0.15));
+        }
         this.addWeaponXp(3);
         this.onEvent('waveclear', { wave: this.wave });
       } else {
@@ -622,6 +688,34 @@ export class Game {
     }
 
     this.aimHot = !!this.aimTarget(0).enemy;
+  }
+
+  /** リロードと持ち替えの進行。 */
+  updateWeapon(dt) {
+    const p = this.player;
+    if (p.switchT > 0) {
+      const prev = p.switchT;
+      p.switchT = Math.max(0, p.switchT - dt);
+      // 構え替えの中間で実際に持ち替える
+      if (p.pendingSlot >= 0 && prev > p.switchTotal / 2 && p.switchT <= p.switchTotal / 2) {
+        p.slot = p.pendingSlot;
+        p.pendingSlot = -1;
+      }
+    }
+    if (p.reloadT > 0) {
+      p.reloadT = Math.max(0, p.reloadT - dt);
+      if (p.reloadT === 0) {
+        const w = this.currentWeapon();
+        if (w) {
+          const stats = this.statsOf(w);
+          const need = stats.magazine - w.mag;
+          const take = Math.min(need, w.reserve);
+          w.mag += take;
+          w.reserve -= take;
+          this.sfx.reloadEnd();
+        }
+      }
+    }
   }
 
   updatePlayer(dt) {
@@ -801,10 +895,21 @@ export class Game {
       it.anim += dt;
       if (Math.hypot(it.x - p.x, it.y - p.y) > 0.55) continue;
       if (it.kind === 'ammo') {
-        if (p.ammo >= p.weapon.magazine) continue;
-        p.ammo = Math.min(p.weapon.magazine, p.ammo + 16);
+        // 予備弾を全武器に配る（構えている武器を多めに）
+        let gained = false;
+        for (const w of p.weapons) {
+          const def = WEAPONS[w.id];
+          const share = w === this.currentWeapon() ? 0.28 : 0.12;
+          const add = Math.ceil(def.reserveMax * share);
+          if (w.reserve >= def.reserveMax) continue;
+          w.reserve = Math.min(def.reserveMax, w.reserve + add);
+          gained = true;
+        }
+        if (!gained) continue;
       } else if (it.kind === 'core') {
-        this.addWeaponXp(5);
+        this.addWeaponXp(8);
+      } else if (it.kind === 'weapon') {
+        this.giveWeapon(it.weaponId);
       } else {
         if (p.hp >= p.maxHp) continue;
         p.hp = Math.min(p.maxHp, p.hp + 28);
@@ -855,10 +960,17 @@ export class Game {
       const da = normAngle(Math.atan2(dy, dx) - angle);
       if (Math.abs(da) > Math.atan2(e.radius, dist)) continue;
       // 上下方向：ピッチを考慮して当たり判定する
-      const h = (this.proj * this.bufH * e.scale) / dist;
-      const vWorld = 0.5 - e.scale / 2 - (e.def.hover || 0);
-      const offsetY = this.pitchBuf + (vWorld * this.proj * this.bufH) / dist;
-      if (Math.abs(offsetY) > h / 2 + this.bufH * 0.02) continue;
+      if (this.mode3d) {
+        const viewAngle = this.pitch * 2.2;
+        const targetAngle = Math.atan2(e.def.center3d - 1.6, dist);
+        const halfAngle = Math.atan2(e.def.height3d / 2, dist);
+        if (Math.abs(targetAngle - viewAngle) > halfAngle) continue;
+      } else {
+        const h = (this.proj * this.bufH * e.scale) / dist;
+        const vWorld = 0.5 - e.scale / 2 - (e.def.hover || 0);
+        const offsetY = this.pitchBuf + (vWorld * this.proj * this.bufH) / dist;
+        if (Math.abs(offsetY) > h / 2 + this.bufH * 0.02) continue;
+      }
       hits.push({ enemy: e, dist });
     }
     hits.sort((a, b) => a.dist - b.dist);
@@ -871,18 +983,91 @@ export class Game {
     return { enemy: hit ? hit.enemy : null, dist: hit ? hit.dist : Infinity };
   }
 
-  /** 武器XPを加算し、レベルが上がったら通知する。 */
-  addWeaponXp(amount) {
+  /** いま構えている武器の状態。 */
+  currentWeapon() {
     const p = this.player;
-    if (!p) return;
-    const before = p.weapon.level;
-    p.xp += amount;
-    const next = weaponForXp(p.xp);
-    if (next.level !== before) {
-      p.weapon = next;
-      p.ammo = Math.min(next.magazine, p.ammo + 20); // 強化時に弾も補充
+    return p && p.weapons.length ? p.weapons[p.slot] : null;
+  }
+
+  /** 武器の性能値（レベル込み）。 */
+  statsOf(w) {
+    if (!w.stats) w.stats = statsFor(WEAPONS[w.id], w.level);
+    return w.stats;
+  }
+
+  /** 弾倉に弾を詰める。予備弾がなければ何もしない。 */
+  reload() {
+    const p = this.player;
+    const w = this.currentWeapon();
+    if (!w || this.state !== 'playing') return;
+    if (p.reloadT > 0 || p.switchT > 0) return;
+    const stats = this.statsOf(w);
+    if (w.mag >= stats.magazine || w.reserve <= 0) return;
+    p.reloadTotal = stats.reload;
+    p.reloadT = stats.reload;
+    this.sfx.reloadStart();
+    this.onEvent('reload', { name: WEAPONS[w.id].name, time: stats.reload });
+  }
+
+  /** 武器を持ち替える（構え直しの時間が入る）。 */
+  switchWeapon(index) {
+    const p = this.player;
+    if (!p || this.state !== 'playing') return;
+    if (index < 0 || index >= p.weapons.length || index === p.slot) return;
+    if (p.switchT > 0) return;
+    p.pendingSlot = index;
+    p.switchTotal = 0.42;
+    p.switchT = 0.42;
+    p.reloadT = 0; // リロードは中断される
+    this.sfx.weaponSwitch();
+  }
+
+  /** 次／前の武器へ。 */
+  cycleWeapon(dir) {
+    const p = this.player;
+    if (!p || !p.weapons.length) return;
+    const n = p.weapons.length;
+    this.switchWeapon(((p.slot + dir) % n + n) % n);
+  }
+
+  /** 武器を手に入れる（すでに持っていれば XP に変える）。 */
+  giveWeapon(id) {
+    const p = this.player;
+    if (!p) return false;
+    if (p.weapons.some((w) => w.id === id)) {
+      this.addWeaponXp(6);
+      return false;
+    }
+    const w = createWeaponState(id);
+    w.stats = statsFor(WEAPONS[id], 1);
+    p.weapons.push(w);
+    p.weapons.sort((a, b) => WEAPONS[a.id].slot - WEAPONS[b.id].slot);
+    const index = p.weapons.findIndex((x) => x.id === id);
+    p.slot = index;
+    p.switchT = 0.42;
+    p.switchTotal = 0.42;
+    p.pendingSlot = -1;
+    this.sfx.weaponUp();
+    this.onEvent('newweapon', { name: WEAPONS[id].name, slot: WEAPONS[id].slot });
+    return true;
+  }
+
+  /** 武器XPを加算し、レベルが上がったら通知する。 */
+  addWeaponXp(amount, target) {
+    const w = target || this.currentWeapon();
+    if (!w) return;
+    const def = WEAPONS[w.id];
+    w.xp += amount;
+    const level = levelForXp(def, w.xp);
+    if (level !== w.level) {
+      w.level = level;
+      w.stats = statsFor(def, level);
+      w.mag = Math.min(w.stats.magazine, w.mag + 4);
+      w.reserve = Math.min(def.reserveMax, w.reserve + Math.round(def.reserveMax * 0.15));
       this.sfx.weaponUp();
-      this.onEvent('weaponup', { name: next.name, level: next.level, perk: next.perk });
+      this.onEvent('weaponup', {
+        name: def.name, level, perk: def.levels[level - 1].perk,
+      });
     }
   }
 
@@ -892,7 +1077,7 @@ export class Game {
     enemy.dying = 0.001;
     this.kills++;
     p.score += enemy.def.score;
-    this.addWeaponXp(XP_BY_TYPE[enemy.type] || 1);
+    this.addWeaponXp(XP_BY_TYPE[enemy.type] || 1); // 使っていた武器が成長する
     this.sfx.kill(this.panOf(enemy));
 
     const roll = Math.random();
@@ -914,33 +1099,51 @@ export class Game {
   fire() {
     if (this.state !== 'playing') return;
     const p = this.player;
-    const w = p.weapon;
+    const w = this.currentWeapon();
+    if (!w) return;
+    const def = WEAPONS[w.id];
+    const stats = this.statsOf(w);
+
+    // リロード中・持ち替え中は撃てない
+    if (p.reloadT > 0 || p.switchT > 0) return;
     if (p.fireCd > 0) return;
-    if (p.ammo <= 0) {
-      p.fireCd = 0.4;
-      this.sfx.empty();
+    // 単発武器は引き金を引き直す必要がある
+    if (!def.auto && p.triggerHeld) return;
+
+    if (w.mag <= 0) {
+      p.triggerHeld = true;
+      if (w.reserve > 0) this.reload();
+      else {
+        p.fireCd = 0.4;
+        this.sfx.empty();
+      }
       return;
     }
-    p.ammo--;
-    p.fireCd = w.interval;
-    p.recoil = 1;
-    p.flash = 0.06 + w.level * 0.008;
-    this.shake = Math.min(1, this.shake + 0.1 + w.level * 0.01);
-    this.sfx.shoot(w.level);
 
-    const pierce = 1 + (w.pierce || 0);
-    for (let i = 0; i < w.pellets; i++) {
-      // 複数弾は左右に振り分けて撃つ
-      const offset = w.pellets === 1 ? 0 : (i / (w.pellets - 1) - 0.5) * w.spread * 2;
-      const spread = offset + (Math.random() - 0.5) * w.spread;
+    w.mag--;
+    p.triggerHeld = true;
+    p.fireCd = stats.interval;
+    p.recoil = 1;
+    p.flash = 0.05 + def.kick * 0.012;
+    this.shake = Math.min(1, this.shake + 0.05 * def.recoil);
+    this.sfx.shoot(w.level, def.id);
+
+    const pierce = 1 + (stats.pierce || 0);
+    for (let i = 0; i < stats.pellets; i++) {
+      const offset = stats.pellets === 1
+        ? 0
+        : (i / (stats.pellets - 1) - 0.5) * stats.spread * 2;
+      const spread = offset + (Math.random() - 0.5) * stats.spread;
       for (const { enemy } of this.aimTargets(spread, pierce)) {
-        enemy.hp -= w.damage;
+        enemy.hp -= stats.damage;
         enemy.hurtT = 0.12;
         enemy.awake = true;
         if (enemy.hp <= 0) this.killEnemy(enemy);
         else this.sfx.hit(this.panOf(enemy));
       }
     }
+
+    if (w.mag <= 0 && w.reserve > 0) this.reload(); // 撃ち切ったら自動で装填
   }
 
   /* ---------------------------- 入力（React から呼ぶ） ---------------------------- */
@@ -956,11 +1159,22 @@ export class Game {
 
   /* ---------------------------------- 描画 ---------------------------------- */
 
-  render() {
+  render(dt) {
     const ctx = this.ctx;
     if (!this.map || !this.player) {
+      ctx.clearRect(0, 0, this.W, this.H);
       ctx.fillStyle = '#05060d';
       ctx.fillRect(0, 0, this.W, this.H);
+      return;
+    }
+
+    // 3D モード：WebGL が世界を描き、2D キャンバスには HUD だけを重ねる
+    if (this.mode3d && this.gl3d) {
+      this.gl3d.render(this, dt || 0.016);
+      ctx.clearRect(0, 0, this.W, this.H);
+      this.drawOverlays();
+      this.drawMinimap();
+      this.drawCrosshair();
       return;
     }
 
@@ -1269,21 +1483,30 @@ export class Game {
   drawWeapon() {
     const ctx = this.bctx;
     const p = this.player;
-    const weapon = this.assets.weapons[Math.min(this.assets.weapons.length - 1, p.weapon.level - 1)];
+    const held = this.currentWeapon();
+    const spriteIdx = held
+      ? Math.min(this.assets.weapons.length - 1, (WEAPONS[held.id].slot - 1) + held.level - 1)
+      : 0;
+    const weapon = this.assets.weapons[spriteIdx];
     const H = this.bufH;
     const W = this.bufW;
     const scale = Math.min(W * 0.62, H * 0.65) / weapon.width;
-    const w = weapon.width * scale;
+    const gunW = weapon.width * scale;
     const h = weapon.height * scale;
     const bobX = Math.sin(this.bob) * H * 0.012;
     const bobY = Math.abs(Math.cos(this.bob)) * H * 0.016;
-    const x = W / 2 - w / 2 + Math.min(W * 0.13, w * 0.55) + bobX;
-    const y = H - h * 0.94 + bobY + p.recoil * H * 0.07;
+    const x = W / 2 - gunW / 2 + Math.min(W * 0.13, gunW * 0.55) + bobX;
+    // リロード中は画面下へ引き下げる
+    const reloadDip = p.reloadTotal && p.reloadT > 0
+      ? Math.sin((1 - p.reloadT / p.reloadTotal) * Math.PI) * H * 0.28 : 0;
+    const switchDip = p.switchTotal && p.switchT > 0
+      ? (1 - Math.abs(p.switchT / p.switchTotal - 0.5) * 2) * H * 0.45 : 0;
+    const y = H - h * 0.94 + bobY + p.recoil * H * 0.07 + reloadDip + switchDip;
 
     if (p.flash > 0) {
       const fx = x + weapon.width * 0.47 * scale;
       const fy = y + weapon.height * 0.04 * scale;
-      const r = H * (0.16 + p.weapon.level * 0.012);
+      const r = H * (0.16 + (held ? held.level : 1) * 0.012);
       const grad = ctx.createRadialGradient(fx, fy, 1, fx, fy, r);
       grad.addColorStop(0, 'rgba(255,244,200,0.95)');
       grad.addColorStop(0.4, 'rgba(255,180,80,0.5)');
@@ -1293,7 +1516,7 @@ export class Game {
       ctx.arc(fx, fy, r, 0, TAU);
       ctx.fill();
     }
-    ctx.drawImage(weapon, x, y, w, h);
+    ctx.drawImage(weapon, x, y, gunW, h);
 
     if (p.flash > 0) {
       ctx.fillStyle = `rgba(255,226,170,${p.flash * 0.32})`;

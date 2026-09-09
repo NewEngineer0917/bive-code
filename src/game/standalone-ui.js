@@ -17,7 +17,7 @@
   let best = readBest();
   let usingPointerLock = false;
 
-  const game = new Game(canvas, { onEvent });
+  const game = new Game(canvas, { onEvent, glCanvas: el('gl') });
   if (window.__BZ) window.__BZ.game = game; // デバッグ・動作確認用
 
   function setPhase(next) {
@@ -47,10 +47,10 @@
   function onEvent(type, payload) {
     if (type === 'wave') {
       showBanner('WAVE ' + payload.wave);
-    } else if (type === 'tier') {
-      showBanner(payload.label, '映像・音響が進化：' + payload.note);
     } else if (type === 'weaponup') {
-      showBanner('WEAPON Lv.' + payload.level, payload.name + '／' + payload.perk);
+      showBanner(payload.name + ' Lv.' + payload.level, payload.perk);
+    } else if (type === 'newweapon') {
+      showBanner('NEW WEAPON', payload.name + '（' + payload.slot + ' キーで切替）');
     } else if (type === 'gameover_LEGACY') {
       const b = el('banner');
       b.hidden = false;
@@ -77,12 +77,42 @@
     el('c-wave').textContent = 'WAVE ' + h.wave;
     el('c-score').textContent = 'SCORE ' + h.score;
     el('c-enemies').textContent = '敵 ' + h.enemies;
-    el('ammo').textContent = h.ammo;
-    el('ammo-box').classList.toggle('empty', h.ammo === 0);
-    el('c-tier').textContent = h.tier;
+    el('ammo').textContent = h.mag;
     el('w-name').textContent = h.weapon;
     el('w-level').textContent = 'Lv.' + h.weaponLevel;
-    el('w-fill').style.width = ((h.weaponMax ? 1 : h.weaponRatio || 0) * 100) + '%';
+    el('w-fill').style.width = ((h.weaponRatio || 0) * 100) + '%';
+    el('reserve').textContent = h.reserve;
+    el('ammo-box').classList.toggle('empty', h.mag === 0);
+
+    // リロード表示
+    const bar = el('reload-bar');
+    bar.hidden = !h.reloading;
+    if (h.reloading) bar.firstElementChild.style.width = (h.reloadRatio * 100) + '%';
+
+    // 武器スロット（数が変わったときだけ作り直す）
+    const slots = el('slots');
+    if (slots.childElementCount !== h.slots.length) {
+      slots.innerHTML = '';
+      h.slots.forEach((sl, i) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'slot';
+        b.innerHTML = '<span class="num">' + sl.slot + '</span>' + sl.short
+          + '<span class="ammo"></span>';
+        b.addEventListener('pointerdown', (e) => {
+          e.preventDefault();
+          e.stopPropagation();
+          game.switchWeapon(i);
+        });
+        slots.appendChild(b);
+      });
+    }
+    h.slots.forEach((sl, i) => {
+      const b = slots.children[i];
+      if (!b) return;
+      b.classList.toggle('active', i === h.slot);
+      b.lastElementChild.textContent = 'Lv.' + sl.level + '  ' + sl.mag + '/' + sl.reserve;
+    });
   }, 100);
 
   /* ------------------------------- キーボード ------------------------------- */
@@ -98,6 +128,13 @@
   window.addEventListener('keydown', (e) => {
     if (['Space', 'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].indexOf(e.code) >= 0) e.preventDefault();
     if (e.code === 'Escape') { if (phase === 'playing') game.setPaused(true); return; }
+    if (phase === 'playing') {
+      if (e.code === 'KeyR') { game.reload(); return; }
+      if (e.code === 'KeyQ') { game.cycleWeapon(-1); return; }
+      if (e.code === 'KeyE') { game.cycleWeapon(1); return; }
+      const digit = /^Digit([1-4])$/.exec(e.code);
+      if (digit) { game.switchWeapon(Number(digit[1]) - 1); return; }
+    }
     if (e.repeat) return;
     keys.add(e.code);
     applyKeys();
@@ -125,6 +162,11 @@
     if (p && p.catch) p.catch(() => { /* 埋め込み環境では使えないのでドラッグ操作にフォールバック */ });
   }
 
+  window.addEventListener('wheel', (e) => {
+    if (phase !== 'playing') return;
+    game.cycleWeapon(e.deltaY > 0 ? 1 : -1);
+  }, { passive: true });
+
   /* --------------------- タッチ／ドラッグ操作（共通ポインター） --------------------- */
   const touch = { move: null, look: null };
   const knob = el('knob');
@@ -137,7 +179,7 @@
   root.addEventListener('pointerdown', (e) => {
     if (phase !== 'playing') return;
     if (e.pointerType === 'mouse' && usingPointerLock) return; // ロック中は上のハンドラが担当
-    if (e.target.closest('.btn-round, .icon-btn')) return;
+    if (e.target.closest('.btn-round, .icon-btn, .slot')) return;
     e.preventDefault();
     const r = root.getBoundingClientRect();
     const x = e.clientX - r.left;
@@ -205,6 +247,15 @@
   }
   holdButton('fire-btn', (v) => { game.input.firing = v; });
   holdButton('dash-btn', (v) => { game.input.sprint = v; });
+  const reloadBtn = el('reload-btn');
+  if (reloadBtn) {
+    reloadBtn.addEventListener('pointerdown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      game.reload();
+    });
+    reloadBtn.addEventListener('contextmenu', (e) => e.preventDefault());
+  }
 
   el('pause-btn').addEventListener('click', () => game.setPaused(true));
   el('mute-btn').addEventListener('click', function () {
@@ -218,6 +269,7 @@
   });
 
   function startGame(key) {
+    el('slots').innerHTML = '';
     difficulty = key || difficulty;
     game.sfx.resume();
     setPhase('playing');

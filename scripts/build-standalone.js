@@ -21,29 +21,58 @@ const MODULES = [
   { file: 'textures.js', exports: ['TEX_SIZE', 'SHADE_LEVELS', 'getAssetSet', 'getFloorTextures'], imports: [] },
   { file: 'mapGen.js', exports: ['MAP_SIZE', 'createRng', 'generateMap'], imports: [] },
   { file: 'audio.js', exports: ['Sfx'], imports: [] },
+  { file: 'fidelity.js', exports: ['GL_QUALITY', 'RENDER_2D'], imports: [] },
   {
-    file: 'fidelity.js',
-    exports: ['TIERS', 'tierForWave', 'WEAPON_LEVELS', 'weaponForXp', 'weaponProgress'],
+    file: 'weapons.js',
+    exports: [
+      'WEAPON_IDS', 'WEAPONS', 'levelForXp', 'statsFor', 'levelProgress', 'createWeaponState',
+    ],
     imports: [],
+  },
+  { file: 'materials.js', exports: ['MAT_SIZE', 'MATERIALS', 'buildMaterials'], imports: [] },
+  {
+    file: 'glmath.js',
+    exports: ['mat4', 'identity', 'multiply', 'perspective', 'lookAt', 'compose'],
+    imports: [],
+  },
+  {
+    file: 'renderer3d.js',
+    exports: ['Renderer3D'],
+    imports: [
+      'buildMaterials', 'MAT_SIZE', 'MATERIALS', 'WEAPONS',
+      'mat4', 'multiply', 'perspective', 'lookAt', 'compose',
+    ],
   },
   {
     file: 'engine.js',
     exports: ['DIFFICULTIES', 'Game'],
     imports: [
       'getAssetSet', 'getFloorTextures', 'generateMap', 'createRng', 'Sfx',
-      'TIERS', 'tierForWave', 'weaponForXp', 'weaponProgress',
+      'GL_QUALITY', 'RENDER_2D', 'Renderer3D',
+      'WEAPONS', 'WEAPON_IDS', 'createWeaponState', 'levelForXp', 'levelProgress', 'statsFor',
     ],
   },
 ];
 
 const indent = (text) => text.split('\n').map((l) => (l ? '  ' + l : l)).join('\n');
 
-const stripModuleSyntax = (file) => fs.readFileSync(path.join(GAME, file), 'utf8')
-  .split('\n')
-  .filter((l) => !/^import\s/.test(l))
-  .map((l) => l.replace(/^export\s+(?=(const|let|function|class))/, ''))
-  .join('\n')
-  .trim();
+const stripModuleSyntax = (file) => {
+  const lines = fs.readFileSync(path.join(GAME, file), 'utf8').split('\n');
+  const out = [];
+  let inImport = false;
+  for (const line of lines) {
+    if (inImport) {
+      if (/;\s*$/.test(line)) inImport = false;
+      continue;
+    }
+    if (/^import\s/.test(line)) {
+      if (!/;\s*$/.test(line)) inImport = true; // 複数行の import
+      continue;
+    }
+    out.push(line.replace(/^export\s+(?=(const|let|function|class))/, ''));
+  }
+  return out.join('\n').trim();
+};
 
 const wrap = (m) => {
   const head = m.imports.length ? `  const { ${m.imports.join(', ')} } = __BZ;\n` : '';

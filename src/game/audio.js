@@ -186,14 +186,57 @@ export class Sfx {
 
   /* --------------------------------- 効果音 --------------------------------- */
 
-  shoot(level = 1) {
+  /** 武器ごとに音色を変える。level が上がるほど厚みが増す。 */
+  shoot(level = 1, id = 'blaster') {
     const t = this.tier;
-    const base = 900 + level * 40;
+    const thick = t.layers >= 2;
+
+    if (id === 'scatter') {
+      this.burst({ dur: 0.22, gain: 0.32, freq: 1500, q: 0.6 });
+      this.tone({ freq: 260, to: 60, dur: 0.26, type: 'sawtooth', gain: 0.24 });
+      if (thick) this.burst({ dur: 0.5, gain: 0.12, freq: 400, q: 0.5, delay: 0.03 });
+      this._sub(58, 0.35, 0.55);
+      return;
+    }
+    if (id === 'smg') {
+      this.tone({ freq: 1150 + level * 30, to: 320, dur: 0.055, type: 'square', gain: 0.16 });
+      this.burst({ dur: 0.05, gain: 0.12, freq: 3200 });
+      this._sub(120, 0.08, 0.2);
+      return;
+    }
+    if (id === 'rail') {
+      this.tone({ freq: 220, to: 2200, dur: 0.12, type: 'sawtooth', gain: 0.2 });
+      this.tone({ freq: 2400, to: 180, dur: 0.42, type: 'sine', gain: 0.22, delay: 0.1 });
+      this.burst({ dur: 0.45, gain: 0.14, freq: 900, q: 0.8, delay: 0.08 });
+      this._sub(45, 0.6, 0.8);
+      return;
+    }
+
+    const base = 900 + level * 60;
     this.tone({ freq: base, to: 160, dur: 0.1, type: 'square', gain: 0.2 });
     this.burst({ dur: 0.09, gain: 0.16, freq: 2400 });
-    if (t.layers >= 2) this.tone({ freq: base * 0.5, to: 120, dur: 0.16, type: 'sawtooth', gain: 0.12 });
+    if (thick) this.tone({ freq: base * 0.5, to: 120, dur: 0.16, type: 'sawtooth', gain: 0.12 });
     if (t.layers >= 3) this.burst({ dur: 0.28, gain: 0.08, freq: 700, q: 0.7, delay: 0.02 });
     this._sub(110, 0.18, 0.3);
+  }
+
+  /** 弾倉を抜く音（リロード開始）。 */
+  reloadStart() {
+    this.burst({ dur: 0.06, gain: 0.16, freq: 1800, q: 3 });
+    this.tone({ freq: 300, to: 180, dur: 0.08, type: 'square', gain: 0.1, delay: 0.02 });
+  }
+
+  /** 弾倉を叩き込む音（リロード完了）。 */
+  reloadEnd() {
+    this.burst({ dur: 0.09, gain: 0.22, freq: 900, q: 2.5 });
+    this.tone({ freq: 200, to: 120, dur: 0.12, type: 'square', gain: 0.14, delay: 0.02 });
+    this._sub(80, 0.16, 0.3);
+  }
+
+  /** 武器の持ち替え。 */
+  weaponSwitch() {
+    this.burst({ dur: 0.05, gain: 0.12, freq: 2600, q: 2 });
+    this.tone({ freq: 520, to: 760, dur: 0.1, type: 'triangle', gain: 0.12, delay: 0.04 });
   }
 
   empty() {

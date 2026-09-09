@@ -31,7 +31,16 @@
     overscroll-behavior: none;
   }
 
-  #view { display: block; width: 100%; height: 100%; cursor: crosshair; }
+  #view, #gl {
+    position: absolute;
+    inset: 0;
+    display: block;
+    width: 100%;
+    height: 100%;
+    cursor: crosshair;
+  }
+  /* 3D 描画用（下のレイヤー）。2D ティアでは非表示になる */
+  #gl { display: none; background: var(--ink); }
 
   /* ---------------------------------- HUD ---------------------------------- */
 
@@ -109,7 +118,61 @@
   .icon-btn:hover { border-color: var(--teal); }
   .icon-btn:active { background: rgba(75, 224, 192, 0.28); }
 
-  .chip.tier { color: #7ce8ff; border-color: rgba(124, 232, 255, 0.5); letter-spacing: 0.14em; }
+  /* 武器スロット */
+  #slots {
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 14px);
+    display: flex;
+    gap: 6px;
+    pointer-events: auto;
+  }
+  .slot {
+    min-width: 62px;
+    padding: 5px 8px;
+    background: rgba(7, 10, 18, 0.7);
+    border: 1px solid var(--line);
+    color: var(--slate);
+    font-family: var(--display);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-align: left;
+    cursor: pointer;
+    opacity: 0.75;
+  }
+  .slot .num { color: var(--teal); margin-right: 4px; }
+  .slot .ammo { display: block; font-size: 10px; opacity: 0.8; font-variant-numeric: tabular-nums; }
+  .slot.active {
+    color: var(--text);
+    border-color: var(--teal);
+    background: rgba(20, 40, 52, 0.85);
+    opacity: 1;
+  }
+
+  #reload-bar {
+    position: absolute;
+    left: 50%;
+    top: 58%;
+    transform: translateX(-50%);
+    width: min(200px, 42vw);
+    text-align: center;
+    font-family: var(--display);
+    font-size: 11px;
+    letter-spacing: 0.22em;
+    color: var(--amber);
+  }
+  #reload-bar i {
+    display: block;
+    height: 4px;
+    width: 0;
+    margin-bottom: 5px;
+    background: var(--amber);
+    box-shadow: 0 0 10px rgba(255, 212, 71, 0.7);
+  }
+
+  #ammo-box small { color: var(--slate); }
+  #ammo-box small span { color: var(--text); }
 
   .weapon {
     display: flex;
@@ -211,6 +274,14 @@
     background: radial-gradient(circle at 35% 30%, rgba(255, 110, 90, 0.5), rgba(90, 16, 28, 0.55));
   }
   #fire-btn:active { transform: scale(0.94); background: radial-gradient(circle at 35% 30%, rgba(255, 205, 160, 0.85), rgba(190, 55, 40, 0.7)); }
+  #reload-btn {
+    right: calc(env(safe-area-inset-right, 0px) + 26px);
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 122px);
+    width: 66px; height: 66px;
+    font-size: 11px;
+    border: 1px solid rgba(255, 212, 71, 0.6);
+    background: rgba(40, 32, 10, 0.6);
+  }
   #dash-btn {
     right: calc(env(safe-area-inset-right, 0px) + 122px);
     bottom: calc(env(safe-area-inset-bottom, 0px) + 24px);
@@ -316,6 +387,7 @@
 </style>
 
 <div id="game">
+  <canvas id="gl"></canvas>
   <canvas id="view"></canvas>
 
   <div id="hud" hidden>
@@ -326,15 +398,18 @@
         <span class="chip" id="c-wave">WAVE 1</span>
         <span class="chip" id="c-score">SCORE 0</span>
         <span class="chip" id="c-enemies">敵 0</span>
-        <span class="chip tier" id="c-tier">8-BIT</span>
       </div>
       <div class="weapon">
-        <span id="w-name">ブラスター Mk.I</span>
+        <span id="w-name">パルスブラスター</span>
         <div class="xpbar"><i id="w-fill"></i></div>
       </div>
     </div>
 
-    <div id="ammo-box"><b id="ammo">48</b><small>AMMO</small><em id="w-level">Lv.1</em></div>
+    <div id="ammo-box">
+      <b id="ammo">14</b><small>/ <span id="reserve">70</span></small><em id="w-level">Lv.1</em>
+    </div>
+    <div id="reload-bar" hidden><i></i><span>RELOADING</span></div>
+    <div id="slots"></div>
 
     <div class="tools">
       <button type="button" class="icon-btn" id="pause-btn" aria-label="ポーズ">❚❚</button>
@@ -349,13 +424,14 @@
     <div id="stick" hidden><i id="knob"></i></div>
     <button type="button" class="btn-round" id="fire-btn">FIRE</button>
     <button type="button" class="btn-round" id="dash-btn">DASH</button>
+    <button type="button" class="btn-round" id="reload-btn">RELOAD</button>
   </div>
 
   <div class="overlay" id="menu">
     <div class="panel">
       <p class="eyebrow">SECTOR 07 / 掃討任務</p>
       <h1>BLASTER ZONE</h1>
-      <p class="lede">自動生成された迷宮に、ウェーブごとに数を増す敵が湧く。生き延びるほど<strong>映像は8BITのドット絵から最新の3D描画へ、音も同時に進化</strong>し、武器は Mk.VI まで強化されていく。</p>
+      <p class="lede">自動生成された迷宮に、ウェーブごとに数を増す敵が湧く。武器は使い込むほど成長し、<strong>4種類の武器を持ち替えながら</strong>戦う。弾倉を撃ち切ったらリロード。</p>
       <button type="button" class="btn" data-difficulty="easy">かんたん ではじめる</button>
       <button type="button" class="btn primary" data-difficulty="normal">ふつう ではじめる</button>
       <button type="button" class="btn" data-difficulty="hard">むずかしい ではじめる</button>
@@ -365,14 +441,17 @@
         <dt>PC 移動</dt><dd>W A S D ／ 矢印キー（Shift でダッシュ）</dd>
         <dt>PC 視点</dt><dd>マウス。カーソルが固定されない環境では画面右側をドラッグ</dd>
         <dt>PC 射撃</dt><dd>クリック ／ スペース</dd>
-        <dt>スマホ</dt><dd>左半分をドラッグで移動、右半分をドラッグで視点、タップか FIRE で射撃</dd>
+        <dt>武器切替</dt><dd>1〜4 キー ／ ホイール ／ Q・E（画面下のスロットをクリックでも可）</dd>
+        <dt>リロード</dt><dd>R キー（弾切れで自動装填）</dd>
+        <dt>スマホ</dt><dd>左半分をドラッグで移動、右半分をドラッグで視点、タップか FIRE で射撃、RELOAD で装填、下のスロットで武器切替</dd>
         <dt>ポーズ</dt><dd>Esc ／ 画面右上の ❚❚</dd>
       </dl>
       <p class="specs">
-        <b>進化</b> 8-BIT → 16-BIT → VGA → SVGA → HD → ULTRA（1ウェーブごとに1段階）<br>
-        <b>武器</b> ブラスター Mk.I → アニヒレーター Mk.VI（撃破でXPが貯まる／強化コアで加速）<br>
+        <b>武器</b> パルスブラスター／スキャッターガン／パルスSMG／レールランス。<br>
+        使うほど XP が貯まり Lv.4 まで成長（威力・装弾数・連射・リロード速度と見た目が変化）<br>
         <b>敵</b> ドローン（高速・接近）／ ガンナー（射撃・距離を取る）／ ブルート（重装甲）<br>
-        <b>描画</b> Canvas 2D のレイキャスティング。テクスチャ・スプライト・効果音はすべてコード生成
+        <b>描画</b> WebGL2 による 3D（法線マップ・実時間の影・HDR・ブルーム）。<br>
+        テクスチャ・3Dモデル・効果音まですべてコードで生成しています
       </p>
     </div>
   </div>
