@@ -19,7 +19,8 @@
     "build": "react-scripts build",
     "test": "react-scripts test",
     "eject": "react-scripts eject",
-    "tailwind-init": "node node_modules/tailwindcss/dist/lib.js init -p"
+    "tailwind-init": "node node_modules/tailwindcss/dist/lib.js init -p",
+    "build:standalone": "node scripts/build-standalone.js"
   },
   "eslintConfig": {
     "extends": [

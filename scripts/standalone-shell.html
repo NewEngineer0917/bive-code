@@ -1,0 +1,359 @@
+<title>Blaster Zone — ブラウザFPS</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@500;600;700&family=Zen+Kaku+Gothic+New:wght@400;700&display=swap">
+<style>
+  :root {
+    --ink: #070a12;
+    --panel: #101725;
+    --line: rgba(120, 220, 255, 0.28);
+    --teal: #4be0c0;
+    --alert: #ff5b6e;
+    --amber: #ffd447;
+    --slate: #8fa0c0;
+    --text: #e6eefb;
+    --display: 'Chakra Petch', 'Trebuchet MS', system-ui, sans-serif;
+    --body: 'Zen Kaku Gothic New', 'Hiragino Kaku Gothic ProN', system-ui, sans-serif;
+  }
+
+  [hidden] { display: none !important; }
+
+  html, body { height: 100%; overflow: hidden; }
+  body { margin: 0; background: var(--ink); color: var(--text); font-family: var(--body); }
+
+  #game {
+    position: fixed;
+    inset: 0;
+    background: var(--ink);
+    overflow: hidden;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
+    overscroll-behavior: none;
+  }
+
+  #view { display: block; width: 100%; height: 100%; cursor: crosshair; }
+
+  /* ---------------------------------- HUD ---------------------------------- */
+
+  #hud { position: absolute; inset: 0; pointer-events: none; }
+
+  .hud-tl {
+    position: absolute;
+    top: calc(env(safe-area-inset-top, 0px) + 12px);
+    left: calc(env(safe-area-inset-left, 0px) + 14px);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-width: 48vw;
+  }
+
+  #hp-bar {
+    width: min(240px, 42vw);
+    height: 12px;
+    border: 1px solid var(--line);
+    background: rgba(7, 10, 18, 0.72);
+    overflow: hidden;
+  }
+  #hp-fill { display: block; height: 100%; width: 100%; background: linear-gradient(90deg, #2fae90, var(--teal)); transition: width 0.15s linear; }
+  #hp-bar.low #hp-fill { background: linear-gradient(90deg, #c22b45, var(--alert)); }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip {
+    font-family: var(--display);
+    font-weight: 600;
+    font-size: clamp(11px, 2.5vw, 14px);
+    letter-spacing: 0.06em;
+    font-variant-numeric: tabular-nums;
+    padding: 3px 10px;
+    background: rgba(7, 10, 18, 0.72);
+    border: 1px solid var(--line);
+    white-space: nowrap;
+  }
+  #c-hp { color: var(--teal); }
+
+  #ammo-box {
+    position: absolute;
+    left: calc(env(safe-area-inset-left, 0px) + 16px);
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 14px);
+    display: flex;
+    align-items: baseline;
+    gap: 7px;
+    padding: 4px 14px;
+    background: rgba(7, 10, 18, 0.66);
+    border: 1px solid var(--line);
+    font-family: var(--display);
+  }
+  #ammo { font-size: clamp(21px, 5vw, 32px); font-weight: 700; color: var(--amber); font-variant-numeric: tabular-nums; line-height: 1; }
+  #ammo-box small { font-size: clamp(10px, 2.2vw, 12px); letter-spacing: 0.18em; color: var(--slate); }
+  #ammo-box.empty #ammo { color: var(--alert); animation: blink 0.7s steps(2, end) infinite; }
+  @keyframes blink { 50% { opacity: 0.2; } }
+
+  .tools {
+    position: absolute;
+    right: calc(env(safe-area-inset-right, 0px) + 12px);
+    top: calc(env(safe-area-inset-top, 0px) + min(22vw, 22vh) + 20px);
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    pointer-events: auto;
+  }
+  .icon-btn {
+    width: 40px; height: 40px;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(7, 10, 18, 0.72);
+    border: 1px solid var(--line);
+    color: var(--text);
+    font-size: 16px;
+    cursor: pointer;
+  }
+  .icon-btn:hover { border-color: var(--teal); }
+  .icon-btn:active { background: rgba(75, 224, 192, 0.28); }
+
+  #banner {
+    position: absolute;
+    top: 17%;
+    left: 0; right: 0;
+    text-align: center;
+    font-family: var(--display);
+    font-size: clamp(28px, 8vw, 62px);
+    font-weight: 700;
+    letter-spacing: 0.2em;
+    color: var(--teal);
+    text-shadow: 0 0 22px rgba(75, 224, 192, 0.55);
+    animation: banner 1.9s ease-out forwards;
+  }
+  @keyframes banner {
+    0% { opacity: 0; transform: scale(0.88); }
+    16% { opacity: 1; transform: scale(1); }
+    72% { opacity: 1; }
+    100% { opacity: 0; transform: scale(1.04); }
+  }
+
+  /* -------------------------------- タッチ操作 -------------------------------- */
+
+  #touch { position: absolute; inset: 0; pointer-events: none; }
+
+  #stick {
+    position: absolute;
+    width: 132px; height: 132px;
+    margin: -66px 0 0 -66px;
+    border-radius: 50%;
+    border: 1px solid var(--line);
+    background: rgba(10, 16, 30, 0.3);
+  }
+  #knob {
+    position: absolute;
+    left: 50%; top: 50%;
+    width: 56px; height: 56px;
+    margin: -28px 0 0 -28px;
+    border-radius: 50%;
+    background: rgba(75, 224, 192, 0.4);
+    border: 1px solid rgba(180, 255, 240, 0.7);
+  }
+
+  .btn-round {
+    position: absolute;
+    border-radius: 50%;
+    pointer-events: auto;
+    font-family: var(--display);
+    font-weight: 700;
+    letter-spacing: 0.12em;
+    color: var(--text);
+    cursor: pointer;
+  }
+  #fire-btn {
+    right: calc(env(safe-area-inset-right, 0px) + 18px);
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 18px);
+    width: 92px; height: 92px;
+    font-size: 15px;
+    border: 2px solid rgba(255, 91, 110, 0.7);
+    background: radial-gradient(circle at 35% 30%, rgba(255, 110, 90, 0.5), rgba(90, 16, 28, 0.55));
+  }
+  #fire-btn:active { transform: scale(0.94); background: radial-gradient(circle at 35% 30%, rgba(255, 205, 160, 0.85), rgba(190, 55, 40, 0.7)); }
+  #dash-btn {
+    right: calc(env(safe-area-inset-right, 0px) + 122px);
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 24px);
+    width: 66px; height: 66px;
+    font-size: 12px;
+    border: 1px solid var(--line);
+    background: rgba(10, 20, 40, 0.55);
+  }
+
+  /* -------------------------------- オーバーレイ ------------------------------- */
+
+  .overlay {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    background:
+      repeating-linear-gradient(rgba(255, 255, 255, 0.022) 0 1px, transparent 1px 3px),
+      radial-gradient(circle at 50% 38%, rgba(18, 30, 58, 0.86), rgba(4, 6, 12, 0.96));
+    overflow-y: auto;
+  }
+
+  .panel {
+    width: min(520px, 100%);
+    background: rgba(12, 18, 32, 0.92);
+    border: 1px solid var(--line);
+    padding: clamp(20px, 4vw, 32px);
+    box-shadow: 0 24px 70px rgba(0, 0, 0, 0.65);
+  }
+
+  .eyebrow {
+    font-family: var(--display);
+    font-size: 11px;
+    letter-spacing: 0.34em;
+    color: var(--slate);
+    margin: 0 0 10px;
+  }
+
+  h1 {
+    font-family: var(--display);
+    font-weight: 700;
+    font-size: clamp(30px, 8vw, 52px);
+    letter-spacing: 0.06em;
+    line-height: 1;
+    margin: 0 0 10px;
+    color: var(--teal);
+    text-shadow: 0 0 26px rgba(75, 224, 192, 0.35);
+    text-wrap: balance;
+  }
+  h1.alert { color: var(--alert); text-shadow: 0 0 26px rgba(255, 91, 110, 0.35); }
+
+  .lede { margin: 0 0 20px; font-size: clamp(12px, 3vw, 15px); line-height: 1.7; color: var(--slate); }
+
+  .btn {
+    display: block;
+    width: 100%;
+    margin-top: 8px;
+    padding: 13px 16px;
+    font-family: var(--display);
+    font-size: clamp(14px, 3.4vw, 16px);
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    color: var(--text);
+    background: rgba(30, 44, 74, 0.8);
+    border: 1px solid var(--line);
+    cursor: pointer;
+    transition: border-color 0.12s, background 0.12s;
+  }
+  .btn:hover { border-color: var(--teal); background: rgba(40, 60, 96, 0.85); }
+  .btn:active { transform: translateY(1px); }
+  .btn.primary { background: linear-gradient(180deg, #2fae90, #1a6a58); border-color: var(--teal); color: #04120e; }
+  .btn.ghost { background: rgba(255, 255, 255, 0.05); }
+  .btn:focus-visible, .icon-btn:focus-visible, .btn-round:focus-visible { outline: 2px solid var(--teal); outline-offset: 2px; }
+
+  .keys {
+    margin-top: 20px;
+    border-top: 1px solid rgba(120, 220, 255, 0.16);
+    padding-top: 14px;
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 6px 14px;
+    font-size: clamp(11px, 2.7vw, 13px);
+    line-height: 1.6;
+  }
+  .keys dt { font-family: var(--display); letter-spacing: 0.1em; color: var(--teal); white-space: nowrap; }
+  .keys dd { margin: 0; color: var(--slate); }
+
+  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 18px 0 6px; }
+  .stat { border: 1px solid rgba(120, 220, 255, 0.16); padding: 12px 6px; text-align: center; }
+  .stat b { display: block; font-family: var(--display); font-size: clamp(20px, 5vw, 28px); color: var(--amber); font-variant-numeric: tabular-nums; }
+  .stat span { font-size: 10px; letter-spacing: 0.18em; color: var(--slate); }
+
+  .note { margin: 14px 0 0; font-family: var(--display); font-size: 12px; letter-spacing: 0.08em; color: var(--amber); min-height: 1em; }
+
+  .specs { margin: 18px 0 0; font-size: 11px; line-height: 1.8; color: rgba(143, 160, 192, 0.75); letter-spacing: 0.04em; }
+  .specs b { color: var(--slate); font-weight: 400; }
+
+  @media (prefers-reduced-motion: reduce) {
+    #banner, #ammo-box.empty #ammo { animation: none; }
+  }
+</style>
+
+</head>
+<body>
+<div id="game">
+  <canvas id="view"></canvas>
+
+  <div id="hud" hidden>
+    <div class="hud-tl">
+      <div id="hp-bar"><i id="hp-fill"></i></div>
+      <div class="chips">
+        <span class="chip" id="c-hp">HP 100</span>
+        <span class="chip" id="c-wave">WAVE 1</span>
+        <span class="chip" id="c-score">SCORE 0</span>
+        <span class="chip" id="c-enemies">敵 0</span>
+      </div>
+    </div>
+
+    <div id="ammo-box"><b id="ammo">48</b><small>AMMO</small></div>
+
+    <div class="tools">
+      <button type="button" class="icon-btn" id="pause-btn" aria-label="ポーズ">❚❚</button>
+      <button type="button" class="icon-btn" id="mute-btn" aria-label="音量">🔊</button>
+      <button type="button" class="icon-btn" id="full-btn" aria-label="全画面">⛶</button>
+    </div>
+
+    <div id="banner" hidden></div>
+  </div>
+
+  <div id="touch" hidden>
+    <div id="stick" hidden><i id="knob"></i></div>
+    <button type="button" class="btn-round" id="fire-btn">FIRE</button>
+    <button type="button" class="btn-round" id="dash-btn">DASH</button>
+  </div>
+
+  <div class="overlay" id="menu">
+    <div class="panel">
+      <p class="eyebrow">SECTOR 07 / 掃討任務</p>
+      <h1>BLASTER ZONE</h1>
+      <p class="lede">自動生成された迷宮に、ウェーブごとに数を増す敵が湧く。弾薬箱と救急箱を拾いながら、どこまで生き残れるか。</p>
+      <button type="button" class="btn" data-difficulty="easy">かんたん ではじめる</button>
+      <button type="button" class="btn primary" data-difficulty="normal">ふつう ではじめる</button>
+      <button type="button" class="btn" data-difficulty="hard">むずかしい ではじめる</button>
+      <p class="note" id="best"></p>
+      <p class="note" id="hint-portrait" hidden>横向きにすると視界が広がります</p>
+      <dl class="keys">
+        <dt>PC 移動</dt><dd>W A S D ／ 矢印キー（Shift でダッシュ）</dd>
+        <dt>PC 視点</dt><dd>マウス。カーソルが固定されない環境では画面右側をドラッグ</dd>
+        <dt>PC 射撃</dt><dd>クリック ／ スペース</dd>
+        <dt>スマホ</dt><dd>左半分をドラッグで移動、右半分をドラッグで視点、タップか FIRE で射撃</dd>
+        <dt>ポーズ</dt><dd>Esc ／ 画面右上の ❚❚</dd>
+      </dl>
+      <p class="specs">
+        <b>敵</b> ドローン（高速・接近）／ ガンナー（射撃・距離を取る）／ ブルート（重装甲）<br>
+        <b>描画</b> Canvas 2D のレイキャスティング。テクスチャ・スプライト・効果音はすべてコード生成
+      </p>
+    </div>
+  </div>
+
+  <div class="overlay" id="paused" hidden>
+    <div class="panel">
+      <p class="eyebrow">一時停止中</p>
+      <h1>PAUSED</h1>
+      <p class="lede">ブラウザのタブを離れると自動的に停止します。</p>
+      <button type="button" class="btn primary" id="resume-btn">ゲームを再開</button>
+      <button type="button" class="btn" data-action="restart">最初からやり直す</button>
+      <button type="button" class="btn ghost" data-action="title">タイトルへ戻る</button>
+    </div>
+  </div>
+
+  <div class="overlay" id="over" hidden>
+    <div class="panel">
+      <p class="eyebrow">通信途絶</p>
+      <h1 class="alert">GAME OVER</h1>
+      <p class="note" id="over-note"></p>
+      <div class="stats">
+        <div class="stat"><b id="r-score">0</b><span>SCORE</span></div>
+        <div class="stat"><b id="r-wave">0</b><span>WAVE</span></div>
+        <div class="stat"><b id="r-kills">0</b><span>KILLS</span></div>
+      </div>
+      <button type="button" class="btn primary" data-action="restart">もう一度プレイ</button>
+      <button type="button" class="btn ghost" data-action="title">タイトルへ戻る</button>
+    </div>
+  </div>
+</div>

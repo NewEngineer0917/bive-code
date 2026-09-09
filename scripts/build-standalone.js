@@ -1,0 +1,77 @@
+/**
+ * 単一HTML版のゲームをビルドする。
+ *
+ *   node scripts/build-standalone.js   →   dist-standalone/index.html
+ *
+ * src/game/*.js（React版と同じゲームロジック）と src/game/standalone-ui.js
+ * （React を使わない UI 層）を 1 枚の HTML に連結する。サーバーもビルド環境も
+ * 不要で、生成された HTML をブラウザで開くだけで動く。
+ *
+ * モジュールごとにスコープを分け、共有名前空間 __BZ 経由で受け渡すことで、
+ * 各ファイルが持つ内部定数（TAU など）の衝突を避けている。
+ */
+const fs = require('fs');
+const path = require('path');
+
+const ROOT = path.join(__dirname, '..');
+const GAME = path.join(ROOT, 'src', 'game');
+const OUT_DIR = path.join(ROOT, 'dist-standalone');
+
+const MODULES = [
+  { file: 'textures.js', exports: ['TEX_SIZE', 'SHADE_LEVELS', 'buildAssets'], imports: [] },
+  { file: 'mapGen.js', exports: ['MAP_SIZE', 'createRng', 'generateMap'], imports: [] },
+  { file: 'audio.js', exports: ['Sfx'], imports: [] },
+  {
+    file: 'engine.js',
+    exports: ['DIFFICULTIES', 'Game'],
+    imports: ['buildAssets', 'SHADE_LEVELS', 'generateMap', 'createRng', 'Sfx'],
+  },
+];
+
+const indent = (text) => text.split('\n').map((l) => (l ? '  ' + l : l)).join('\n');
+
+const stripModuleSyntax = (file) => fs.readFileSync(path.join(GAME, file), 'utf8')
+  .split('\n')
+  .filter((l) => !/^import\s/.test(l))
+  .map((l) => l.replace(/^export\s+(?=(const|let|function|class))/, ''))
+  .join('\n')
+  .trim();
+
+const wrap = (m) => {
+  const head = m.imports.length ? `  const { ${m.imports.join(', ')} } = __BZ;\n` : '';
+  return `/* ---------- src/game/${m.file} ---------- */\n(function () {\n${head}${indent(stripModuleSyntax(m.file))}\n  Object.assign(__BZ, { ${m.exports.join(', ')} });\n})();`;
+};
+
+const engine = MODULES.map(wrap).join('\n\n');
+const ui = fs.readFileSync(path.join(GAME, 'standalone-ui.js'), 'utf8').trim();
+const shell = fs.readFileSync(path.join(__dirname, 'standalone-shell.html'), 'utf8');
+
+const html = `<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="description" content="ブラウザで遊べるレスポンシブ対応のFPSゲーム。外部ライブラリなし、単一HTMLで動作します。">
+<meta name="theme-color" content="#070a12">
+${shell.trim()}
+<script>
+/* =========================================================================
+   BLASTER ZONE — ゲームエンジン（外部ライブラリなし）
+   src/game/{textures,mapGen,audio,engine}.js を連結したもの
+   ========================================================================= */
+window.__BZ = {};
+${engine}
+</script>
+<script>
+(function () {
+  const { Game } = window.__BZ;
+${indent(ui)}
+})();
+</script>
+</body>
+</html>
+`;
+
+fs.mkdirSync(OUT_DIR, { recursive: true });
+fs.writeFileSync(path.join(OUT_DIR, 'index.html'), html);
+console.log(`dist-standalone/index.html を生成しました (${(html.length / 1024).toFixed(1)} KB)`);

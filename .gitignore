@@ -23,3 +23,6 @@ yarn-debug.log*
 yarn-error.log*
 
 .vercel
+
+# 単一HTML版のビルド出力
+/dist-standalone
