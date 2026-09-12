@@ -6,6 +6,7 @@ import { onAuthStateChanged, signOut } from 'firebase/auth';
 import Signup from './components/Signup';
 import Login from './components/Login';
 import FpsGame from './components/FpsGame';
+import AstraBond from './components/AstraBond';
 
 function Home() {
   const [todos, setTodos] = useState([]);
@@ -50,6 +51,9 @@ function Home() {
         <div className="container mx-auto flex justify-between items-center">
           <Link to="/" className="text-white text-lg font-bold">Todo App</Link>
           <div className="flex items-center gap-2">
+            <Link to="/astra" className="bg-sky-600 hover:bg-sky-700 text-white font-bold py-2 px-4 rounded">
+              ✨ ASTRA BOND
+            </Link>
             <Link to="/fps" className="bg-indigo-500 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded">
               🎮 FPSゲーム
             </Link>
@@ -120,6 +124,7 @@ function App() {
         <Route path="/signup" element={<Signup />} />
         <Route path="/login" element={<Login />} />
         <Route path="/fps" element={<FpsGame />} />
+        <Route path="/astra" element={<AstraBond />} />
         <Route
           path="/"
           element={currentUser ? <Home /> : <Login />}

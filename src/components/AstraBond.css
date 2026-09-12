@@ -1,0 +1,387 @@
+/* ASTRA BOND — ゲーム UI。ブラウザの標準部品は使わず、全て作り込む。 */
+
+.ab-root {
+  position: fixed;
+  inset: 0;
+  background: #05070e;
+  overflow: hidden;
+  font-family: "Hiragino Sans", "Yu Gothic", "Noto Sans JP", system-ui, sans-serif;
+  color: #eaf2ff;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+}
+
+.ab-canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/* ---------------------------------------------------------- タイトル */
+
+.ab-title {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  background:
+    radial-gradient(120% 80% at 50% 18%, rgba(60, 160, 220, 0.22), transparent 60%),
+    radial-gradient(90% 60% at 50% 100%, rgba(20, 40, 90, 0.5), transparent 70%),
+    linear-gradient(180deg, #050912 0%, #071322 45%, #04070f 100%);
+  z-index: 20;
+  transition: opacity 900ms ease;
+}
+.ab-title.ab-hide { opacity: 0; pointer-events: none; }
+
+.ab-title-stars {
+  position: absolute;
+  inset: 0;
+  background-image:
+    radial-gradient(1.4px 1.4px at 12% 22%, rgba(255,255,255,.85), transparent),
+    radial-gradient(1.2px 1.2px at 68% 14%, rgba(190,225,255,.8), transparent),
+    radial-gradient(1.6px 1.6px at 82% 46%, rgba(255,255,255,.7), transparent),
+    radial-gradient(1.1px 1.1px at 26% 62%, rgba(190,230,255,.75), transparent),
+    radial-gradient(1.3px 1.3px at 46% 34%, rgba(255,255,255,.6), transparent),
+    radial-gradient(1.5px 1.5px at 90% 76%, rgba(200,235,255,.6), transparent),
+    radial-gradient(1.2px 1.2px at 6% 82%, rgba(255,255,255,.5), transparent);
+  animation: ab-twinkle 6s ease-in-out infinite alternate;
+}
+@keyframes ab-twinkle { from { opacity: .55; } to { opacity: 1; } }
+
+.ab-title-glow {
+  position: absolute;
+  width: min(70vw, 560px);
+  height: min(70vw, 560px);
+  border-radius: 50%;
+  background: radial-gradient(circle, rgba(88, 210, 255, 0.3), rgba(88, 210, 255, 0) 65%);
+  filter: blur(8px);
+  animation: ab-pulse 5.5s ease-in-out infinite;
+  top: 12%;
+}
+@keyframes ab-pulse { 0%,100% { transform: scale(1); opacity: .75; } 50% { transform: scale(1.12); opacity: 1; } }
+
+.ab-logo {
+  position: relative;
+  text-align: center;
+  letter-spacing: .42em;
+  margin-bottom: 8px;
+}
+.ab-logo-main {
+  font-size: clamp(38px, 9vw, 92px);
+  font-weight: 200;
+  line-height: 1;
+  background: linear-gradient(180deg, #ffffff 10%, #a9e6ff 55%, #4f9fd8 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  text-shadow: 0 0 42px rgba(110, 210, 255, .45);
+}
+.ab-logo-sub {
+  margin-top: 14px;
+  font-size: clamp(10px, 2.1vw, 14px);
+  letter-spacing: .6em;
+  color: rgba(180, 215, 245, .72);
+}
+.ab-logo-rule {
+  margin: 22px auto 0;
+  width: min(60vw, 420px);
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(150, 220, 255, .6), transparent);
+}
+
+.ab-start {
+  position: relative;
+  margin-top: 46px;
+  padding: 15px 58px;
+  font-size: clamp(13px, 2.4vw, 17px);
+  letter-spacing: .34em;
+  color: #eaf6ff;
+  background: linear-gradient(180deg, rgba(40, 110, 170, .32), rgba(16, 46, 82, .5));
+  border: 1px solid rgba(140, 215, 255, .45);
+  border-radius: 2px;
+  cursor: pointer;
+  transition: all 220ms ease;
+  backdrop-filter: blur(6px);
+}
+.ab-start::before, .ab-start::after {
+  content: '';
+  position: absolute;
+  width: 9px; height: 9px;
+  border: 1px solid rgba(160, 225, 255, .8);
+}
+.ab-start::before { top: -1px; left: -1px; border-right: 0; border-bottom: 0; }
+.ab-start::after { bottom: -1px; right: -1px; border-left: 0; border-top: 0; }
+.ab-start:hover:not(:disabled) {
+  background: linear-gradient(180deg, rgba(70, 160, 220, .45), rgba(26, 70, 120, .6));
+  border-color: rgba(190, 240, 255, .9);
+  box-shadow: 0 0 34px rgba(90, 200, 255, .35);
+  letter-spacing: .4em;
+}
+.ab-start:disabled { opacity: .45; cursor: default; }
+
+.ab-loadbar {
+  position: relative;
+  margin-top: 34px;
+  width: min(62vw, 380px);
+}
+.ab-loadbar-track {
+  height: 2px;
+  background: rgba(120, 180, 220, .18);
+  overflow: hidden;
+}
+.ab-loadbar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #3d86c0, #7fe3ff);
+  box-shadow: 0 0 12px rgba(120, 220, 255, .8);
+  transition: width 260ms ease;
+}
+.ab-loadbar-label {
+  margin-top: 10px;
+  font-size: 11px;
+  letter-spacing: .22em;
+  color: rgba(175, 210, 240, .7);
+  text-align: center;
+  min-height: 14px;
+}
+
+.ab-title-hint {
+  position: absolute;
+  bottom: 26px;
+  font-size: 11px;
+  letter-spacing: .18em;
+  color: rgba(160, 195, 225, .45);
+  text-align: center;
+  line-height: 1.9;
+  padding: 0 20px;
+}
+
+/* --------------------------------------------------------------- HUD */
+
+.ab-hud { position: absolute; inset: 0; pointer-events: none; z-index: 10; }
+
+.ab-district {
+  position: absolute;
+  top: 26px; left: 30px;
+  animation: ab-slidein 700ms cubic-bezier(.2,.8,.3,1);
+}
+.ab-district-name {
+  font-size: 19px;
+  letter-spacing: .3em;
+  text-shadow: 0 2px 14px rgba(0,0,0,.85);
+}
+.ab-district-rule {
+  margin-top: 7px;
+  width: 74px; height: 1px;
+  background: linear-gradient(90deg, rgba(140,220,255,.95), transparent);
+}
+@keyframes ab-slidein { from { opacity: 0; transform: translateX(-16px); } to { opacity: 1; transform: none; } }
+
+.ab-clock {
+  position: absolute;
+  top: 26px; right: 30px;
+  text-align: right;
+  text-shadow: 0 2px 12px rgba(0,0,0,.8);
+}
+.ab-clock-time { font-size: 21px; letter-spacing: .16em; font-variant-numeric: tabular-nums; }
+.ab-clock-label { font-size: 11px; letter-spacing: .3em; color: rgba(180,212,240,.75); margin-top: 3px; }
+
+.ab-prompt {
+  position: absolute;
+  left: 50%;
+  bottom: 19%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 9px 20px 9px 12px;
+  background: linear-gradient(90deg, rgba(8,20,34,.82), rgba(8,20,34,.5));
+  border: 1px solid rgba(130,200,240,.32);
+  border-radius: 3px;
+  font-size: 13px;
+  letter-spacing: .12em;
+  backdrop-filter: blur(4px);
+  animation: ab-fadein 240ms ease;
+}
+@keyframes ab-fadein { from { opacity: 0; transform: translate(-50%, 8px); } to { opacity: 1; transform: translate(-50%, 0); } }
+.ab-key {
+  display: inline-flex;
+  align-items: center; justify-content: center;
+  min-width: 26px; height: 24px;
+  padding: 0 7px;
+  border: 1px solid rgba(150,215,255,.6);
+  border-radius: 3px;
+  font-size: 11px;
+  letter-spacing: .06em;
+  color: #d6efff;
+  background: rgba(30,80,130,.4);
+  box-shadow: inset 0 -2px 0 rgba(0,0,0,.35);
+}
+
+/* ---------------------------------------------------------- 会話ウィンドウ */
+
+.ab-dialogue {
+  position: absolute;
+  left: 50%;
+  bottom: 5%;
+  transform: translateX(-50%);
+  width: min(88vw, 860px);
+  pointer-events: auto;
+  animation: ab-dialog-in 260ms cubic-bezier(.2,.9,.3,1);
+}
+@keyframes ab-dialog-in { from { opacity: 0; transform: translate(-50%, 18px); } to { opacity: 1; transform: translate(-50%, 0); } }
+.ab-dialogue-name {
+  display: inline-block;
+  margin-left: 14px;
+  padding: 5px 20px;
+  background: linear-gradient(180deg, rgba(40,110,170,.92), rgba(16,50,90,.92));
+  border: 1px solid rgba(150,220,255,.5);
+  border-bottom: none;
+  border-radius: 4px 4px 0 0;
+  font-size: 13px;
+  letter-spacing: .22em;
+}
+.ab-dialogue-body {
+  position: relative;
+  padding: 20px 26px 24px;
+  min-height: 92px;
+  background: linear-gradient(180deg, rgba(7,17,30,.94), rgba(5,12,22,.96));
+  border: 1px solid rgba(130,200,245,.4);
+  border-radius: 0 4px 4px 4px;
+  box-shadow: 0 18px 50px rgba(0,0,0,.6), inset 0 1px 0 rgba(160,220,255,.12);
+  font-size: 15px;
+  line-height: 1.95;
+  letter-spacing: .05em;
+  backdrop-filter: blur(6px);
+}
+.ab-dialogue-next {
+  position: absolute;
+  right: 18px; bottom: 12px;
+  font-size: 11px;
+  color: rgba(160,215,250,.8);
+  letter-spacing: .1em;
+  animation: ab-bob 1.2s ease-in-out infinite;
+}
+@keyframes ab-bob { 0%,100% { transform: translateY(0); opacity:.7 } 50% { transform: translateY(3px); opacity:1 } }
+
+/* -------------------------------------------------------------- 設定 */
+
+.ab-menu-btn {
+  position: absolute;
+  top: 22px; right: 50%;
+  transform: translateX(50%);
+  pointer-events: auto;
+  width: 38px; height: 34px;
+  display: flex; align-items: center; justify-content: center;
+  gap: 4px;
+  background: rgba(8,20,34,.55);
+  border: 1px solid rgba(130,200,240,.3);
+  border-radius: 3px;
+  cursor: pointer;
+}
+.ab-menu-btn span { width: 3px; height: 13px; background: rgba(180,225,255,.85); }
+
+.ab-panel {
+  position: absolute;
+  inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(3,7,14,.72);
+  backdrop-filter: blur(9px);
+  pointer-events: auto;
+  z-index: 15;
+}
+.ab-panel-inner {
+  width: min(92vw, 460px);
+  padding: 30px 32px 26px;
+  background: linear-gradient(180deg, rgba(10,22,38,.96), rgba(6,13,24,.97));
+  border: 1px solid rgba(130,200,245,.35);
+  border-radius: 4px;
+  box-shadow: 0 24px 60px rgba(0,0,0,.65);
+}
+.ab-panel-title {
+  font-size: 14px; letter-spacing: .34em;
+  padding-bottom: 14px; margin-bottom: 20px;
+  border-bottom: 1px solid rgba(130,200,245,.22);
+}
+.ab-row { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; font-size: 13px; }
+.ab-row-label { color: rgba(195,222,245,.85); letter-spacing: .1em; }
+.ab-seg { display: flex; border: 1px solid rgba(130,200,245,.32); border-radius: 3px; overflow: hidden; }
+.ab-seg button {
+  padding: 7px 15px; font-size: 12px; letter-spacing: .1em;
+  background: transparent; border: none; color: rgba(180,212,240,.8); cursor: pointer;
+  transition: background 160ms ease;
+}
+.ab-seg button + button { border-left: 1px solid rgba(130,200,245,.22); }
+.ab-seg button.on { background: rgba(60,150,215,.5); color: #fff; }
+.ab-seg button:hover:not(.on) { background: rgba(60,150,215,.18); }
+
+.ab-slider { display: flex; align-items: center; gap: 10px; }
+.ab-slider input { width: 150px; accent-color: #5fc8ff; }
+
+.ab-stats {
+  margin-top: 20px; padding-top: 16px;
+  border-top: 1px solid rgba(130,200,245,.18);
+  font-size: 11px; line-height: 1.85;
+  color: rgba(160,196,225,.7);
+  letter-spacing: .06em;
+  font-variant-numeric: tabular-nums;
+}
+.ab-close {
+  margin-top: 22px; width: 100%;
+  padding: 11px; font-size: 12px; letter-spacing: .3em;
+  background: rgba(50,130,190,.3);
+  border: 1px solid rgba(150,215,255,.45);
+  border-radius: 3px; color: #eaf6ff; cursor: pointer;
+}
+.ab-close:hover { background: rgba(70,165,225,.45); }
+
+/* -------------------------------------------------------- モバイル操作 */
+
+.ab-touch { position: absolute; inset: 0; pointer-events: none; z-index: 12; }
+.ab-stick {
+  position: absolute;
+  width: 108px; height: 108px;
+  border-radius: 50%;
+  border: 1px solid rgba(160,215,255,.35);
+  background: radial-gradient(circle, rgba(60,140,200,.14), rgba(20,50,90,.06));
+  transform: translate(-50%, -50%);
+}
+.ab-stick-knob {
+  position: absolute; left: 50%; top: 50%;
+  width: 46px; height: 46px; border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, rgba(180,230,255,.85), rgba(50,130,190,.6));
+  border: 1px solid rgba(200,240,255,.7);
+  transform: translate(-50%, -50%);
+}
+.ab-action {
+  position: absolute;
+  right: 34px; bottom: 96px;
+  width: 82px; height: 82px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 12px; letter-spacing: .16em;
+  border: 1px solid rgba(160,220,255,.55);
+  background: radial-gradient(circle at 35% 30%, rgba(70,160,220,.5), rgba(18,52,90,.55));
+  pointer-events: auto;
+  box-shadow: 0 6px 22px rgba(0,0,0,.4);
+}
+.ab-action:active { background: radial-gradient(circle at 35% 30%, rgba(120,210,255,.7), rgba(30,80,130,.7)); }
+
+.ab-fps {
+  position: absolute; left: 30px; bottom: 18px;
+  font-size: 10px; letter-spacing: .16em;
+  color: rgba(150,190,220,.5);
+  font-variant-numeric: tabular-nums;
+}
+
+@media (max-width: 640px) {
+  .ab-district { top: 16px; left: 16px; }
+  .ab-district-name { font-size: 15px; }
+  .ab-clock { top: 16px; right: 16px; }
+  .ab-clock-time { font-size: 17px; }
+  .ab-dialogue-body { font-size: 13px; padding: 15px 18px 20px; min-height: 76px; }
+  .ab-fps { left: 16px; bottom: 10px; }
+}
