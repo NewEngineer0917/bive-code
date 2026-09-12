@@ -1,0 +1,50 @@
+<title>ASTRA BOND</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet"
+  href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400&family=Zen+Kaku+Gothic+New:wght@300;400;500&display=swap">
+<style>
+/* 書体：ロゴは端正なセリフ、日本語 UI はゼンカクゴシック。
+   ゲーム画面そのものが主役なので、UI は細く静かに。 */
+:root {
+  --ab-ink: #eaf2ff;
+  --ab-void: #05070e;
+  --ab-nova: #7fe3ff;
+}
+html, body { background: var(--ab-void); color: var(--ab-ink); }
+.ab-root {
+  font-family: "Zen Kaku Gothic New", "Hiragino Sans", "Yu Gothic", "Noto Sans JP", system-ui, sans-serif;
+  font-weight: 400;
+}
+.ab-logo-main {
+  font-family: "Cormorant Garamond", "Hiragino Mincho ProN", "Yu Mincho", serif;
+  font-weight: 300;
+}
+.ab-start, .ab-clock-time, .ab-district-name { font-weight: 300; }
+.ab-fallback {
+  position: fixed; inset: 0; display: flex; align-items: center; justify-content: center;
+  padding: 32px; text-align: center; line-height: 2; font-size: 14px;
+  background: var(--ab-void); color: var(--ab-ink);
+  font-family: "Zen Kaku Gothic New", "Hiragino Sans", system-ui, sans-serif;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ab-title-stars, .ab-title-glow, .ab-dialogue-next { animation: none !important; }
+}
+</style>
+<style>/* --- AstraBond.css --- */
+__ASTRA_CSS__
+</style>
+
+<div id="root"></div>
+<noscript class="ab-fallback">ASTRA BOND を遊ぶには JavaScript を有効にしてください。</noscript>
+<script src="astra-app.js"></script>
+<script>
+  // WebGL2 が無い環境では、真っ黒な画面ではなく理由を出す
+  (function () {
+    var probe = document.createElement('canvas');
+    if (!probe.getContext('webgl2')) {
+      document.getElementById('root').innerHTML =
+        '<div class="ab-fallback">この環境では WebGL2 が使えないため、ASTRA BOND を描画できません。<br>'
+        + '最新の Chrome / Edge / Safari / Firefox でお試しください。</div>';
+    }
+  })();
+</script>

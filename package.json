@@ -22,7 +22,8 @@
     "tailwind-init": "node node_modules/tailwindcss/dist/lib.js init -p",
     "build:standalone": "node scripts/build-standalone.js",
     "make:audio": "node scripts/make-audio.js",
-    "make:models": "node scripts/make-models.js"
+    "make:models": "node scripts/make-models.js",
+    "build:astra": "node scripts/build-astra-page.js"
   },
   "eslintConfig": {
     "extends": [
@@ -44,6 +45,7 @@
   },
   "devDependencies": {
     "autoprefixer": "^10.4.21",
+    "esbuild": "^0.24.2",
     "playwright": "^1.49.1",
     "postcss": "^8.5.6",
     "tailwindcss": "^3.4.19"
